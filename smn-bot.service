@@ -1,0 +1,36 @@
+[Unit]
+Description=SMN Weather Alert Telegram Bot Daemon (NaudirEarlyAlert)
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# User running the daemon (adjust if your VM user is different)
+User=ubuntu
+Group=ubuntu
+
+# Set working directory to project root
+WorkingDirectory=/opt/NaudirEarlyAlert
+
+# Load environment variables from .env
+EnvironmentFile=/opt/NaudirEarlyAlert/.env
+Environment=PYTHONUNBUFFERED=1
+
+# Execute bot using virtualenv Python binary
+ExecStart=/opt/NaudirEarlyAlert/venv/bin/python bot.py
+
+# Restart daemon automatically on failure
+Restart=always
+RestartSec=10
+
+# Resource & logging limits
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=smn-bot
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

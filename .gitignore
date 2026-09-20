@@ -1,0 +1,25 @@
+# Environment files
+.env
+
+# Database files
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Python cache & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+
+# Logs
+*.log
+
+# Testing & IDE artifacts
+.pytest_cache/
+.coverage
+.vscode/
+.idea/
