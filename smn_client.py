@@ -1,9 +1,10 @@
 """SMN (Servicio Meteorológico Nacional) alert endpoints client.
 
-Supports both:
-1. Public feeds: https://ws.smn.gob.ar/alerts/type/AL and /ACP
-2. Official web API: https://ws1.smn.gob.ar/v1/ with auto-extracted JWT token
-   for location-specific SAT and short-term warnings (ACP).
+Supports:
+1. Official web API: https://ws1.smn.gob.ar/v1/ with auto-extracted JWT token
+   for coordinate georeferenced SAT and short-term warnings (ACP).
+2. Legacy public feeds: https://ws.smn.gob.ar/alerts/type/AL and /ACP
+   with automatic curl_cffi Chrome impersonation to bypass Cloudflare on cloud environments.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# Optional curl_cffi for browser TLS fingerprint impersonation
+# Optional curl_cffi for browser TLS fingerprint impersonation (essential on Cloud VMs)
 try:
     from curl_cffi import requests as cffi_requests
     HAS_CURL_CFFI = True
@@ -95,6 +96,7 @@ class SMNClient:
             try:
                 self._cffi_session = cffi_requests.Session(impersonate="chrome120")
                 self._cffi_session.headers.update(DEFAULT_HEADERS)
+                logger.info("Initialized curl_cffi session with Chrome impersonation.")
             except Exception as err:
                 logger.debug("Could not initialize curl_cffi session: %s", err)
 
@@ -102,6 +104,22 @@ class SMNClient:
         self._jwt_token: Optional[str] = None
         self._token_expiry: float = 0.0
         self._cached_location_id: Optional[int] = None
+
+    def _http_get(
+        self,
+        url: str,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> Any:
+        """Perform HTTP GET using curl_cffi if available (to pass Cloudflare), else requests."""
+        h = headers or self._get_auth_headers()
+        if self._cffi_session:
+            try:
+                resp = self._cffi_session.get(url, params=params, headers=h, timeout=self.timeout)
+                return resp
+            except Exception as err:
+                logger.debug("curl_cffi request failed for %s: %s. Falling back to requests.", url, err)
+        return self.session.get(url, params=params, headers=h, timeout=self.timeout)
 
     def get_jwt_token(self, force_refresh: bool = False) -> Optional[str]:
         """Fetch or refresh JWT token from SMN website."""
@@ -111,22 +129,13 @@ class SMNClient:
 
         logger.info("Fetching fresh SMN JWT token from https://www.smn.gob.ar/...")
         try:
-            html = ""
-            if self._cffi_session:
-                resp = self._cffi_session.get("https://www.smn.gob.ar/", timeout=self.timeout)
-                if resp.status_code == 200:
-                    html = resp.text
-            if not html:
-                resp = self.session.get("https://www.smn.gob.ar/", timeout=self.timeout)
-                if resp.status_code == 200:
-                    html = resp.text
-
-            if html:
+            resp = self._http_get("https://www.smn.gob.ar/", headers=DEFAULT_HEADERS)
+            if resp.status_code == 200:
+                html = resp.text
                 match = re.search(r"localStorage\.setItem\(['\"]token['\"]\s*,\s*['\"]([^'\"]+)['\"]", html)
                 if match:
                     token = match.group(1)
                     self._jwt_token = token
-                    # Parse expiry from JWT payload if possible
                     try:
                         parts = token.split(".")
                         if len(parts) >= 2:
@@ -135,8 +144,12 @@ class SMNClient:
                             self._token_expiry = float(payload.get("exp", now + 3600))
                     except Exception:
                         self._token_expiry = now + 3600
-                    logger.info("Successfully obtained SMN JWT token (expires in %ds)", int(self._token_expiry - now))
+                    logger.info("Successfully obtained SMN JWT token (valid for %ds)", int(self._token_expiry - now))
                     return token
+                else:
+                    logger.warning("Could not find token regex in smn.gob.ar HTML.")
+            else:
+                logger.warning("Failed to fetch smn.gob.ar homepage: HTTP %s", resp.status_code)
         except Exception as err:
             logger.warning("Failed to fetch SMN JWT token: %s", err)
 
@@ -157,20 +170,24 @@ class SMNClient:
 
         token = self.get_jwt_token()
         if not token:
+            logger.warning("Cannot resolve location ID without JWT token.")
             return None
 
         url = f"{WS1_BASE_URL}/georef/location/coord"
         try:
-            headers = self._get_auth_headers()
-            resp = self.session.get(url, params={"lat": lat, "lon": lon}, headers=headers, timeout=self.timeout)
+            resp = self._http_get(url, params={"lat": lat, "lon": lon})
             if resp.status_code == 200:
                 data = resp.json()
                 loc_id = data.get("id") or data.get("_id")
                 if loc_id:
                     self._cached_location_id = int(loc_id)
-                    logger.info("Resolved coordinates (%s, %s) to SMN Location: %s (%s, %s)",
-                                lat, lon, self._cached_location_id, data.get("name"), data.get("department"))
+                    logger.info(
+                        "Resolved coordinates (%s, %s) to SMN Location: ID=%s, Name=%s (%s)",
+                        lat, lon, self._cached_location_id, data.get("name"), data.get("department")
+                    )
                     return self._cached_location_id
+            else:
+                logger.warning("Georef coordinate lookup returned status %s: %s", resp.status_code, resp.text[:150])
         except Exception as err:
             logger.warning("Error resolving location ID for (%s, %s): %s", lat, lon, err)
         return None
@@ -183,26 +200,25 @@ class SMNClient:
         """
         loc_id = self.resolve_location_id(lat, lon)
         if not loc_id:
+            logger.warning("Location ID could not be resolved for SAT check.")
             return False, None
 
         url = f"{WS1_BASE_URL}/warning/alert/location/{loc_id}"
         try:
-            headers = self._get_auth_headers()
-            resp = self.session.get(url, headers=headers, timeout=self.timeout)
+            resp = self._http_get(url)
 
-            # Retry once with refreshed token if 401 Unauthorized
+            # If 401, refresh token and retry
             if resp.status_code == 401:
                 logger.info("JWT token expired (401). Refreshing token...")
                 self.get_jwt_token(force_refresh=True)
-                headers = self._get_auth_headers()
-                resp = self.session.get(url, headers=headers, timeout=self.timeout)
+                resp = self._http_get(url)
 
             if resp.status_code == 200:
                 data = resp.json()
                 warnings = data.get("warnings", [])
                 for w in warnings:
                     max_level = w.get("max_level", 1)
-                    # Levels 3 (Amarillo), 4 (Naranja), 5 (Rojo) are active alerts!
+                    # Levels 3 (Amarillo), 4 (Naranja), 5 (Rojo) represent active SAT alerts
                     if max_level >= 3:
                         events_list = []
                         for e in w.get("events", []):
@@ -220,9 +236,14 @@ class SMNClient:
                             "title": f"Alerta {level_label}: {event_desc}",
                             "source": "ws1.smn.gob.ar",
                         }
-                        logger.warning("Active SAT alert found on ws1: Level=%s (%s) for %s",
-                                       max_level, level_label, alert_info["date"])
+                        logger.warning(
+                            "ACTIVE SAT alert detected via ws1: Level=%s (%s), Event=%s, Date=%s",
+                            max_level, level_label, event_desc, alert_info["date"]
+                        )
                         return True, alert_info
+                logger.info("Location %s has 0 active SAT warnings above normal (max_level < 3).", loc_id)
+            else:
+                logger.warning("SAT alert check returned status %s: %s", resp.status_code, resp.text[:150])
         except Exception as err:
             logger.warning("Error fetching location SAT alerts from %s: %s", url, err)
 
@@ -231,15 +252,10 @@ class SMNClient:
     def _fetch_endpoint(self, url: str) -> List[Dict[str, Any]]:
         """Fetch and parse JSON from legacy open feeds with fallback."""
         try:
-            response = self.session.get(url, timeout=self.timeout)
+            response = self._http_get(url)
             if response.status_code == 200:
                 data = response.json()
                 return data if isinstance(data, list) else [data]
-            elif response.status_code == 503 and self._cffi_session:
-                cffi_resp = self._cffi_session.get(url, timeout=self.timeout)
-                if cffi_resp.status_code == 200:
-                    data = cffi_resp.json()
-                    return data if isinstance(data, list) else [data]
         except Exception as err:
             logger.debug("Fetch failed for %s: %s", url, err)
         return []
