@@ -41,7 +41,7 @@ logger = logging.getLogger("smn_daemon")
 
 def load_config() -> dict:
     """Load configuration from environment variables and .env file."""
-    load_dotenv()
+    load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
 
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token or token == "YOUR_BOT_TOKEN_HERE":

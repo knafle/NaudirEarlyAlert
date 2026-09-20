@@ -14,13 +14,18 @@ import base64
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from dotenv import load_dotenv
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+# Ensure .env from project directory is loaded
+load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
 
 # Optional curl_cffi for browser TLS fingerprint impersonation (essential on Cloud VMs)
 try:
@@ -128,7 +133,14 @@ class SMNClient:
             return self._jwt_token
 
         # 1. Check if Scrape.do API key is configured (auto-refresh 24/7)
-        scrapedo_key = os.getenv("SCRAPEDO_API_KEY")
+        scrapedo_key = (
+            os.getenv("SCRAPEDO_API_KEY")
+            or os.getenv("SCRAPE_DO_API_KEY")
+            or os.getenv("SCRAPEDO_KEY")
+            or os.getenv("SCRAPEDO_TOKEN")
+        )
+        if scrapedo_key:
+            scrapedo_key = scrapedo_key.strip().strip('"').strip("'")
         if scrapedo_key:
             try:
                 logger.info("Fetching fresh SMN token via Scrape.do proxy...")
