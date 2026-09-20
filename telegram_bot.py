@@ -112,6 +112,19 @@ class TelegramAlertBot:
         self.application.add_handler(CommandHandler("estado", self._cmd_estado))
         self.application.add_handler(CommandHandler(["descartes", "avisos", "radar"], self._cmd_descartes))
         self.application.add_handler(CommandHandler("help", self._cmd_help))
+        self.application.add_error_handler(self._error_handler)
+
+    async def _error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle errors during update processing."""
+        err_str = str(context.error).lower()
+        logger.error("Telegram application error: %s", context.error)
+        if "conflict" in err_str and "webhook" in err_str:
+            logger.warning("Webhook conflict detected in error handler. Forcing delete_webhook...")
+            try:
+                await context.bot.delete_webhook(drop_pending_updates=True)
+                logger.info("Conflicting webhook successfully deleted.")
+            except Exception as err:
+                logger.error("Error auto-clearing webhook: %s", err)
 
     async def _cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command to subscribe."""

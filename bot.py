@@ -132,6 +132,11 @@ async def main() -> None:
     # Run Telegram bot and Worker concurrently
     app = telegram_bot.application
     await app.initialize()
+    try:
+        await app.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Cleared any conflicting Telegram webhook.")
+    except Exception as err:
+        logger.warning("Could not clear webhook: %s", err)
     await app.start()
     await app.updater.start_polling(drop_pending_updates=True)
     logger.info("Telegram bot polling started successfully.")
