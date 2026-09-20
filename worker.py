@@ -25,11 +25,29 @@ def parse_polygon_coords(raw: Any) -> List[Tuple[float, float]]:
     """Parse raw polygon data from SMN ACP feed into (longitude, latitude) tuples.
 
     Handles:
+    - GeoJSON geometry dict: {"type": "Polygon", "coordinates": [[[lon, lat], ...]]}
+    - Nested coordinate rings: [[[lon, lat], ...]]
     - String representations: "[-34.12,-58.50],[-34.40,-58.90]" or "[[...]]"
     - List of coordinates: [[-34.12, -58.50], ...]
     - Auto-detects [lat, lon] vs [lon, lat] ordering based on Argentine coordinate ranges.
     """
     pairs: List[Tuple[float, float]] = []
+
+    if isinstance(raw, dict):
+        if "coordinates" in raw:
+            raw = raw["coordinates"]
+        elif "geometry" in raw and isinstance(raw["geometry"], dict):
+            raw = raw["geometry"].get("coordinates", [])
+
+    # Unwrap nested rings (GeoJSON Polygon: [ [ [lon, lat], ... ] ])
+    while (
+        isinstance(raw, (list, tuple))
+        and len(raw) > 0
+        and isinstance(raw[0], (list, tuple))
+        and len(raw[0]) > 0
+        and isinstance(raw[0][0], (list, tuple))
+    ):
+        raw = raw[0]
 
     if isinstance(raw, str):
         # Match coordinate pairs like [-34.12, -58.50]
@@ -55,7 +73,6 @@ def parse_polygon_coords(raw: Any) -> List[Tuple[float, float]]:
     # Argentine coordinate heuristics:
     # Latitude ranges roughly from -20 to -55
     # Longitude ranges roughly from -53 to -73
-    # If the first value is between -20 and -55 and second is between -53 and -75, it is [lat, lon].
     v0, v1 = pairs[0]
     is_lat_first = (abs(v0) < abs(v1)) if (v0 < 0 and v1 < 0) else True
 
@@ -71,19 +88,39 @@ def parse_polygon_coords(raw: Any) -> List[Tuple[float, float]]:
     return coords
 
 
-def is_point_in_polygon(coords: List[Tuple[float, float]], lat: float, lon: float) -> bool:
-    """Check if the given (lat, lon) point falls inside the polygon coordinates."""
+def check_containment_and_distance(
+    coords: List[Tuple[float, float]], lat: float, lon: float
+) -> Tuple[bool, float, Tuple[float, float]]:
+    """Check if point is inside polygon and calculate approximate distance in km to storm centroid.
+
+    Returns:
+        (inside: bool, distance_km: float, centroid: (lat, lon))
+    """
     if len(coords) < 3:
-        return False
+        return False, 9999.0, (0.0, 0.0)
     try:
         poly = Polygon(coords)
         if not poly.is_valid:
             poly = make_valid(poly)
         point = Point(lon, lat)
-        return bool(poly.contains(point))
+        inside = bool(poly.contains(point))
+
+        centroid_lon, centroid_lat = poly.centroid.x, poly.centroid.y
+        # Approx distance in km: 1 deg lat ~ 111 km, 1 deg lon at lat -34 ~ 92 km
+        d_lat_km = (centroid_lat - lat) * 111.0
+        d_lon_km = (centroid_lon - lon) * 92.0
+        dist_km = (d_lat_km ** 2 + d_lon_km ** 2) ** 0.5
+
+        return inside, dist_km, (centroid_lat, centroid_lon)
     except Exception as err:
         logger.warning("Error evaluating polygon containment: %s", err)
-        return False
+        return False, 9999.0, (0.0, 0.0)
+
+
+def is_point_in_polygon(coords: List[Tuple[float, float]], lat: float, lon: float) -> bool:
+    """Check if the given (lat, lon) point falls inside the polygon coordinates."""
+    inside, _, _ = check_containment_and_distance(coords, lat, lon)
+    return inside
 
 
 def generate_event_id(item: Dict[str, Any]) -> str:
@@ -214,47 +251,72 @@ class WeatherAlertWorker:
                 except asyncio.CancelledError:
                     break
 
-            logger.debug("Polling ACP warnings (/alerts/type/ACP)...")
+            logger.info("📡 Consultando avisos de radar a muy corto plazo (ACP)...")
             warnings = await self.client.get_short_term_warnings_async()
             current_active_ids: Set[str] = set()
+
+            if not warnings:
+                logger.info("ℹ️ No hay avisos ACP activos reportados por el SMN en este momento.")
+            else:
+                logger.info("🔍 Se encontraron %d avisos ACP activos en el país. Analizando geometrías...", len(warnings))
 
             for item in warnings:
                 event_id = generate_event_id(item)
                 current_active_ids.add(event_id)
 
-                raw_poly = item.get("polygon")
+                title = str(item.get("title") or item.get("description") or "Aviso ACP").strip()
+                raw_zones = item.get("zones") or []
+                zones_summary = "; ".join(raw_zones) if isinstance(raw_zones, list) else str(raw_zones)
+
+                raw_poly = item.get("geometry") or item.get("polygon")
                 if not raw_poly:
+                    logger.warning("⚠️ Aviso ACP ID %s (%s) sin geometría. Descartado.", event_id, title[:30])
                     continue
 
                 coords = parse_polygon_coords(raw_poly)
                 if not coords:
+                    logger.warning("⚠️ Aviso ACP ID %s sin coordenadas legibles. Descartado.", event_id)
                     continue
 
-                # Point-in-polygon containment check
-                inside = is_point_in_polygon(coords, self.target_lat, self.target_lon)
+                # Geospatial containment and distance check
+                inside, dist_km, centroid = check_containment_and_distance(
+                    coords, self.target_lat, self.target_lon
+                )
+
                 if inside:
                     logger.warning(
-                        "Target location (%s, %s) is INSIDE storm polygon for ACP event '%s': %s",
+                        "🎯 ¡TORMENTA SOBRE EL NAUDIR! Aviso ACP ID %s (%s) CUBRE el barrio. "
+                        "Coordenadas (%s, %s) dentro del polígono.",
+                        event_id,
+                        title,
                         self.target_lat,
                         self.target_lon,
-                        event_id,
-                        item.get("title"),
                     )
                     if event_id not in self.seen_acp_ids:
                         self.seen_acp_ids.add(event_id)
-                        logger.info("New storm cell detected! Triggering alert broadcast for %s", event_id)
+                        logger.info("📢 Nueva tormenta detectada para El Naudir. Disparando difusión a suscriptores...")
                         if self.broadcast_callback:
                             try:
                                 await self.broadcast_callback(item)
                             except Exception as err:
                                 logger.error("Broadcast callback failed for event %s: %s", event_id, err, exc_info=True)
                     else:
-                        logger.debug("Event %s already notified. Skipping duplicate broadcast.", event_id)
+                        logger.info("ℹ️ Aviso ACP ID %s ya notificado anteriormente. Omitiendo duplicado.", event_id)
+                else:
+                    logger.info(
+                        "ℹ️ ACP ID %s descartado: '%s' | Zonas: %s | Centroide: (%.2f, %.2f) a ~%.0f km de El Naudir | Fuera de cobertura.",
+                        event_id,
+                        title[:40],
+                        zones_summary[:50] if zones_summary else "N/A",
+                        centroid[0],
+                        centroid[1],
+                        dist_km,
+                    )
 
             # Prune seen IDs that are no longer in the active SMN ACP feed
             expired_ids = self.seen_acp_ids - current_active_ids
             if expired_ids:
-                logger.debug("Pruning %d expired ACP event IDs from memory: %s", len(expired_ids), expired_ids)
+                logger.info("Pruning %d expired ACP event IDs from memory: %s", len(expired_ids), expired_ids)
                 self.seen_acp_ids.intersection_update(current_active_ids)
 
             try:

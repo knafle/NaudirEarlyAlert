@@ -98,6 +98,26 @@ class TestWorkerGeospatialLogic(unittest.TestCase):
         coords_cordoba = parse_polygon_coords(raw_cordoba)
         self.assertFalse(is_point_in_polygon(coords_cordoba, -34.3100, -58.7391))
 
+    def test_geojson_polygon_parsing(self) -> None:
+        # Real SMN GeoJSON polygon structure
+        geojson = {
+            "type": "Polygon",
+            "coordinates": [
+                [
+                    [-61.75, -33.15],
+                    [-61.49, -33.86],
+                    [-60.53, -34.2],
+                    [-59.94, -34.01],
+                    [-61.11, -32.77],
+                    [-61.46, -32.86]
+                ]
+            ]
+        }
+        coords = parse_polygon_coords(geojson)
+        self.assertEqual(len(coords), 6)
+        # Verify El Naudir is outside this Pergamino/San Nicolas storm
+        self.assertFalse(is_point_in_polygon(coords, -34.3100, -58.7391))
+
     def test_generate_event_id_deduplication(self) -> None:
         item_a = {
             "date": "20/09/2026",

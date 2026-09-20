@@ -349,7 +349,27 @@ class SMNClient:
         return self._fetch_endpoint(URL_SAT_ALERTS)
 
     def get_short_term_warnings(self) -> List[Dict[str, Any]]:
-        """Retrieve short-term radar warnings (/alerts/type/ACP)."""
+        """Retrieve short-term radar warnings (ACP) from ws1 API with legacy fallback."""
+        # 1. Primary: Official ws1 endpoint
+        token = self.get_jwt_token()
+        if token:
+            url = f"{WS1_BASE_URL}/warning/shortterm/"
+            try:
+                resp = self._http_get(url)
+                if resp.status_code == 401:
+                    logger.info("JWT token expired while querying ACP warnings. Refreshing...")
+                    self.get_jwt_token(force_refresh=True)
+                    resp = self._http_get(url)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data, list):
+                        return data
+                    if isinstance(data, dict) and "warnings" in data:
+                        return data["warnings"]
+            except Exception as err:
+                logger.warning("Error fetching ACP warnings from %s: %s", url, err)
+
+        # 2. Fallback: Legacy open feed
         return self._fetch_endpoint(URL_ACP_WARNINGS)
 
     async def get_location_sat_alerts_async(self, lat: float, lon: float) -> Tuple[bool, Optional[Dict[str, Any]]]:

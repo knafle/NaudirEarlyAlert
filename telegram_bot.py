@@ -32,24 +32,56 @@ DEFAULT_RADAR_URL = "https://www.smn.gob.ar/radar"
 
 def format_acp_message(item: Dict[str, Any], location_name: str = "El Naudir") -> str:
     """Format an ACP radar alert dictionary into an HTML Telegram message."""
-    hora = html.escape(str(item.get("hour") or item.get("hora") or "Desconocida"))
-    titulo = str(item.get("title") or item.get("titulo") or item.get("description") or "Tormentas severas")
+    raw_date = str(item.get("date") or "")
+    hora = ""
+    if "T" in raw_date:
+        try:
+            hora = raw_date.split("T")[1][:5]
+        except Exception:
+            pass
+    if not hora:
+        hora = str(item.get("hour") or item.get("hora") or "Reciente")
+
+    titulo = str(item.get("title") or item.get("titulo") or item.get("description") or "Tormentas severas").strip()
     detalle = html.escape(titulo)
 
     # Resolve radar animated GIF or link
-    radar_url = (
-        item.get("gmp_general")
-        or item.get("gmp")
-        or item.get("url")
-        or DEFAULT_RADAR_URL
-    )
+    radar_url = None
+    images = item.get("images")
+    if isinstance(images, list):
+        for img in images:
+            if isinstance(img, dict) and img.get("url"):
+                title_img = str(img.get("title", "")).lower()
+                if "ezeiza" in title_img or "general" in title_img:
+                    radar_url = img["url"]
+                    break
+        if not radar_url:
+            for img in images:
+                if isinstance(img, dict) and img.get("url"):
+                    radar_url = img["url"]
+                    break
+
+    if not radar_url:
+        radar_url = (
+            item.get("gmp_general")
+            or item.get("gmp")
+            or item.get("url")
+            or DEFAULT_RADAR_URL
+        )
     radar_url = html.escape(str(radar_url).strip())
+
+    zones = item.get("zones")
+    zones_text = ""
+    if zones and isinstance(zones, list):
+        filtered_zones = [z.strip() for z in zones if z.strip()][:3]
+        if filtered_zones:
+            zones_text = "<b>Zonas bajo aviso:</b>\n" + "\n".join(f"• {html.escape(z)}" for z in filtered_zones) + "\n\n"
 
     message = (
         f"⚠️ <b>ALERTA METEOROLÓGICA (ACP)</b> ⚠️\n\n"
-        f"<b>Emisión:</b> {hora}\n"
-        f"<b>Detalle:</b> {detalle}\n"
-        f"<b>Duración:</b> Válido por 3 horas desde su emisión\n\n"
+        f"<b>Emisión:</b> {html.escape(hora)}\n"
+        f"<b>Detalle:</b> {detalle}\n\n"
+        f"{zones_text}"
         f"📍 <i>Tormenta severa detectada sobre nuestras coordenadas ({html.escape(location_name)}).</i>\n\n"
         f'🔗 <a href="{radar_url}">Ver radar oficial</a>'
     )
