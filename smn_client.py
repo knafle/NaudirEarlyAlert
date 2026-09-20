@@ -24,8 +24,11 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# Ensure .env from project directory is loaded
-load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
+# Ensure .env or env from project directory is loaded
+for _env_name in (".env", "env"):
+    _p = Path(__file__).resolve().parent / _env_name
+    if _p.is_file():
+        load_dotenv(dotenv_path=_p)
 
 # Optional curl_cffi for browser TLS fingerprint impersonation (essential on Cloud VMs)
 try:
