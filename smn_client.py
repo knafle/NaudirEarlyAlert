@@ -13,6 +13,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -126,9 +127,51 @@ class SMNClient:
         if not force_refresh and self._jwt_token and now < self._token_expiry - 300:
             return self._jwt_token
 
-        logger.info("Fetching fresh SMN JWT token from https://www.smn.gob.ar/...")
+        # 1. Check if token is explicitly provided via environment
+        env_token = os.getenv("SMN_JWT_TOKEN")
+        if env_token and not force_refresh:
+            self._jwt_token = env_token.strip()
+            self._token_expiry = now + 86400
+            logger.info("Using SMN JWT token from environment variable.")
+            return self._jwt_token
 
-        # Try multiple browser impersonation profiles to bypass Cloudflare WAF
+        # 2. Check if a custom token relay (e.g. Cloudflare Worker) is configured
+        relay_url = os.getenv("TOKEN_RELAY_URL")
+        if relay_url:
+            try:
+                logger.info("Fetching token from relay: %s", relay_url)
+                r = self.session.get(relay_url, timeout=self.timeout)
+                if r.status_code == 200:
+                    data = r.json() if "application/json" in r.headers.get("content-type", "") else {}
+                    token = data.get("token") or r.text.strip()
+                    if token and len(token) > 50:
+                        self._jwt_token = token
+                        self._token_expiry = now + 3600
+                        logger.info("Successfully obtained SMN JWT token from relay URL.")
+                        return token
+            except Exception as err:
+                logger.warning("Token relay %s failed: %s", relay_url, err)
+
+        # 3. Check if Scrape.do API key is configured (free Cloudflare bypass)
+        scrapedo_key = os.getenv("SCRAPEDO_API_KEY")
+        if scrapedo_key:
+            try:
+                logger.info("Fetching token via Scrape.do proxy...")
+                r = self.session.get(f"https://api.scrape.do?token={scrapedo_key}&url=https://www.smn.gob.ar/", timeout=self.timeout)
+                if r.status_code == 200:
+                    match = re.search(r"localStorage\.setItem\(['\"]token['\"]\s*,\s*['\"]([^'\"]+)['\"]", r.text)
+                    if match:
+                        token = match.group(1)
+                        self._jwt_token = token
+                        self._token_expiry = now + 3600
+                        logger.info("Successfully obtained SMN JWT token via Scrape.do.")
+                        return token
+            except Exception as err:
+                logger.warning("Scrape.do token fetch failed: %s", err)
+
+        logger.info("Fetching fresh SMN JWT token directly from https://www.smn.gob.ar/...")
+
+        # 4. Direct fetch using multiple browser impersonation profiles
         impersonation_profiles = ["chrome124", "safari17_0", "chrome120"] if HAS_CURL_CFFI else []
 
         for profile in impersonation_profiles:
