@@ -94,9 +94,8 @@ class SMNClient:
         self._cffi_session: Optional[Any] = None
         if HAS_CURL_CFFI:
             try:
-                self._cffi_session = cffi_requests.Session(impersonate="chrome120")
-                self._cffi_session.headers.update(DEFAULT_HEADERS)
-                logger.info("Initialized curl_cffi session with Chrome impersonation.")
+                self._cffi_session = cffi_requests.Session(impersonate="chrome124")
+                logger.info("Initialized curl_cffi session with Chrome 124 impersonation.")
             except Exception as err:
                 logger.debug("Could not initialize curl_cffi session: %s", err)
 
@@ -128,31 +127,50 @@ class SMNClient:
             return self._jwt_token
 
         logger.info("Fetching fresh SMN JWT token from https://www.smn.gob.ar/...")
+
+        # Try multiple browser impersonation profiles to bypass Cloudflare WAF
+        impersonation_profiles = ["chrome124", "safari17_0", "chrome120"] if HAS_CURL_CFFI else []
+
+        for profile in impersonation_profiles:
+            try:
+                resp = cffi_requests.get("https://www.smn.gob.ar/", impersonate=profile, timeout=self.timeout)
+                if resp.status_code == 200:
+                    html = resp.text
+                    match = re.search(r"localStorage\.setItem\(['\"]token['\"]\s*,\s*['\"]([^'\"]+)['\"]", html)
+                    if match:
+                        token = match.group(1)
+                        self._jwt_token = token
+                        try:
+                            parts = token.split(".")
+                            if len(parts) >= 2:
+                                payload_b64 = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
+                                payload = json.loads(base64.urlsafe_b64decode(payload_b64).decode("utf-8"))
+                                self._token_expiry = float(payload.get("exp", now + 3600))
+                        except Exception:
+                            self._token_expiry = now + 3600
+                        logger.info("Successfully obtained SMN JWT token using %s (valid for %ds)",
+                                    profile, int(self._token_expiry - now))
+                        return token
+                else:
+                    logger.debug("Profile %s received status %s from smn.gob.ar", profile, resp.status_code)
+            except Exception as err:
+                logger.debug("Profile %s failed: %s", profile, err)
+
+        # Fallback to standard requests if cffi failed
         try:
-            resp = self._http_get("https://www.smn.gob.ar/", headers=DEFAULT_HEADERS)
+            resp = self.session.get("https://www.smn.gob.ar/", timeout=self.timeout)
             if resp.status_code == 200:
                 html = resp.text
                 match = re.search(r"localStorage\.setItem\(['\"]token['\"]\s*,\s*['\"]([^'\"]+)['\"]", html)
                 if match:
                     token = match.group(1)
                     self._jwt_token = token
-                    try:
-                        parts = token.split(".")
-                        if len(parts) >= 2:
-                            payload_b64 = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
-                            payload = json.loads(base64.urlsafe_b64decode(payload_b64).decode("utf-8"))
-                            self._token_expiry = float(payload.get("exp", now + 3600))
-                    except Exception:
-                        self._token_expiry = now + 3600
-                    logger.info("Successfully obtained SMN JWT token (valid for %ds)", int(self._token_expiry - now))
+                    self._token_expiry = now + 3600
                     return token
-                else:
-                    logger.warning("Could not find token regex in smn.gob.ar HTML.")
-            else:
-                logger.warning("Failed to fetch smn.gob.ar homepage: HTTP %s", resp.status_code)
         except Exception as err:
-            logger.warning("Failed to fetch SMN JWT token: %s", err)
+            logger.warning("Standard session failed to fetch token: %s", err)
 
+        logger.warning("Could not extract SMN JWT token from website.")
         return self._jwt_token
 
     def _get_auth_headers(self) -> Dict[str, str]:
