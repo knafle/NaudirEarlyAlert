@@ -47,6 +47,14 @@ class SubscribersDB:
                 );
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS notified_acp (
+                    event_id TEXT PRIMARY KEY,
+                    notified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                """
+            )
         logger.info("Initialized subscribers database at %s", self.db_path)
 
     # Synchronous methods
@@ -105,6 +113,31 @@ class SubscribersDB:
             cursor = conn.execute("SELECT COUNT(*) FROM subscribers")
             row = cursor.fetchone()
             return row[0] if row else 0
+
+    def is_acp_notified_sync(self, event_id: str) -> bool:
+        """Check if an ACP event ID was already broadcast."""
+        with self._get_connection() as conn:
+            cursor = conn.execute("SELECT 1 FROM notified_acp WHERE event_id = ?", (str(event_id),))
+            return cursor.fetchone() is not None
+
+    def mark_acp_notified_sync(self, event_id: str) -> None:
+        """Record an ACP event ID as notified."""
+        with self._get_connection() as conn:
+            conn.execute("INSERT OR IGNORE INTO notified_acp (event_id) VALUES (?)", (str(event_id),))
+
+    def get_all_notified_acp_sync(self) -> List[str]:
+        """Return all previously notified ACP event IDs."""
+        with self._get_connection() as conn:
+            cursor = conn.execute("SELECT event_id FROM notified_acp")
+            return [row[0] for row in cursor.fetchall()]
+
+    def prune_old_acp_sync(self, hours: int = 24) -> int:
+        """Prune ACP event IDs older than specified hours."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                f"DELETE FROM notified_acp WHERE notified_at < datetime('now', '-{hours} hours')"
+            )
+            return cursor.rowcount
 
     # Asynchronous non-blocking wrappers
     async def add_subscriber(self, chat_id: int) -> bool:

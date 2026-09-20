@@ -152,6 +152,7 @@ class WeatherAlertWorker:
         acp_poll_interval_minutes: float = 3.0,
         force_acp_poll: bool = False,
         broadcast_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+        subscribers_db: Optional[Any] = None,
     ) -> None:
         self.client = smn_client
         self.target_lat = target_lat
@@ -161,6 +162,7 @@ class WeatherAlertWorker:
         self.acp_interval_seconds = acp_poll_interval_minutes * 60.0
         self.force_acp_poll = force_acp_poll
         self.broadcast_callback = broadcast_callback
+        self.db = subscribers_db
 
         # State tracking
         self.sat_active: bool = False
@@ -168,6 +170,16 @@ class WeatherAlertWorker:
         self.seen_acp_ids: Set[str] = set()
         self._sat_event = asyncio.Event()
         self._running = False
+
+        # Pre-load previously notified IDs from database if available
+        if self.db and hasattr(self.db, "get_all_notified_acp_sync"):
+            try:
+                persisted_ids = self.db.get_all_notified_acp_sync()
+                self.seen_acp_ids.update(persisted_ids)
+                if persisted_ids:
+                    logger.info("Loaded %d previously notified ACP event IDs from database.", len(persisted_ids))
+            except Exception as err:
+                logger.warning("Could not pre-load notified ACP IDs from DB: %s", err)
 
     def check_sat_matches(self, alerts: List[Dict[str, Any]]) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """Check if any active SAT alert matches the target zone with above-normal severity."""
@@ -294,6 +306,11 @@ class WeatherAlertWorker:
                     )
                     if event_id not in self.seen_acp_ids:
                         self.seen_acp_ids.add(event_id)
+                        if self.db and hasattr(self.db, "mark_acp_notified_sync"):
+                            try:
+                                self.db.mark_acp_notified_sync(event_id)
+                            except Exception as err:
+                                logger.warning("Could not persist notified ACP ID %s: %s", event_id, err)
                         logger.info("📢 Nueva tormenta detectada para El Naudir. Disparando difusión a suscriptores...")
                         if self.broadcast_callback:
                             try:

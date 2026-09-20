@@ -99,6 +99,7 @@ async def main() -> None:
         sat_poll_interval_hours=config["sat_hours"],
         acp_poll_interval_minutes=config["acp_minutes"],
         force_acp_poll=config["force_acp"],
+        subscribers_db=db,
     )
 
     telegram_bot = TelegramAlertBot(
