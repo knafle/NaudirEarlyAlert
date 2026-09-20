@@ -110,6 +110,7 @@ class TelegramAlertBot:
         self.application.add_handler(CommandHandler("start", self._cmd_start))
         self.application.add_handler(CommandHandler("stop", self._cmd_stop))
         self.application.add_handler(CommandHandler("estado", self._cmd_estado))
+        self.application.add_handler(CommandHandler(["descartes", "avisos", "radar"], self._cmd_descartes))
         self.application.add_handler(CommandHandler("help", self._cmd_help))
 
     async def _cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -165,14 +166,71 @@ class TelegramAlertBot:
             else:
                 sat_status = f"⚠️ <b>ACTIVO ({html.escape(events)})</b>"
 
+        discarded_count = 0
+        if self.worker_ref:
+            discarded_dict = getattr(self.worker_ref, "current_discarded_acp", {})
+            discarded_count = len(discarded_dict)
+
+        discarded_line = ""
+        if self.worker_ref and self.worker_ref.sat_active:
+            discarded_line = f"• <b>Avisos ACP fuera del barrio:</b> {discarded_count} descartados (/descartes)\n"
+
         msg = (
             f"ℹ️ <b>Estado del Sistema - {html.escape(self.location_name)}</b>\n\n"
             f"• <b>Alerta Regional SAT:</b> {sat_status}\n"
             f"• <b>Monitoreo Radar (ACP):</b> {'⚡ Activo (cada 3 min)' if (self.worker_ref and self.worker_ref.sat_active) else '💤 Dormido (esperando alerta)'}\n"
+            f"{discarded_line}"
             f"• <b>Usuarios Suscritos:</b> {count}\n"
             f"• <b>Modo:</b> 24/7 Daemon Activo\n\n"
+            "Usa /descartes para ver tormentas activas fuera de cobertura.\n"
             "Usa /stop si deseas desuscribirte."
         )
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
+    async def _cmd_descartes(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """List currently ongoing ACP storm warnings discarded for El Naudir."""
+        if not update.effective_chat:
+            return
+
+        discarded = {}
+        if self.worker_ref:
+            discarded = getattr(self.worker_ref, "current_discarded_acp", {})
+
+        if not discarded:
+            msg = (
+                f"🛰️ <b>Avisos ACP Descartados - {html.escape(self.location_name)}</b>\n\n"
+                "ℹ️ No hay avisos de tormenta descartados en este momento.\n"
+                "(No hay celdas de tormenta activas registradas fuera del barrio en el radar del SMN).\n\n"
+                f"📍 <i>Monitoreo 24/7 activo sobre {html.escape(self.location_name)}.</i>"
+            )
+            await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+            return
+
+        lines = [
+            f"🛰️ <b>Avisos ACP Vigentes Descartados (Fuera de {html.escape(self.location_name)})</b>\n",
+            f"Tormentas activas en la región fuera de cobertura: <b>{len(discarded)}</b>\n",
+        ]
+
+        for idx, (event_id, data) in enumerate(discarded.items(), 1):
+            title = html.escape(str(data.get("title", "Tormenta")).strip())
+            reason = html.escape(str(data.get("reason", "Fuera de cobertura")))
+            zones = str(data.get("zones", ""))
+            if len(zones) > 90:
+                zones = zones[:87] + "..."
+            zones_esc = html.escape(zones)
+
+            lines.append(
+                f"<b>{idx}. ID {html.escape(str(event_id))}:</b> {title}\n"
+                f"• <b>Zonas:</b> {zones_esc}\n"
+                f"• <b>Motivo de descarte:</b> ❌ {reason}\n"
+            )
+
+        lines.append(
+            f"📍 <i>Coordenadas protegidas: {html.escape(self.location_name)} (-34.3100, -58.7391).</i>\n"
+            "💡 <i>Si cualquier celda de tormenta se desplaza hacia El Naudir, el bot te alertará al instante.</i>"
+        )
+
+        msg = "\n".join(lines)
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
     async def _cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -185,6 +243,7 @@ class TelegramAlertBot:
             "/start - Suscribirse a las alertas inmediatas de tormentas\n"
             "/stop - Cancelar tu suscripción\n"
             "/estado - Ver el estado actual del monitoreo y alertas SAT\n"
+            "/descartes - Ver avisos ACP activos actualmente descartados (fuera del barrio)\n"
             "/help - Mostrar esta ayuda"
         )
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)

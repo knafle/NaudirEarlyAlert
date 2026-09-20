@@ -168,6 +168,8 @@ class WeatherAlertWorker:
         self.sat_active: bool = False
         self.active_sat_alert: Optional[Dict[str, Any]] = None
         self.seen_acp_ids: Set[str] = set()
+        self.current_discarded_acp: Dict[str, Dict[str, Any]] = {}
+        self.last_acp_check_time: Optional[float] = None
         self._sat_event = asyncio.Event()
         self._running = False
 
@@ -266,6 +268,7 @@ class WeatherAlertWorker:
             logger.info("📡 Consultando avisos de radar a muy corto plazo (ACP)...")
             warnings = await self.client.get_short_term_warnings_async()
             current_active_ids: Set[str] = set()
+            active_discarded: Dict[str, Dict[str, Any]] = {}
 
             if not warnings:
                 logger.info("ℹ️ No hay avisos ACP activos reportados por el SMN en este momento.")
@@ -283,11 +286,27 @@ class WeatherAlertWorker:
                 raw_poly = item.get("geometry") or item.get("polygon")
                 if not raw_poly:
                     logger.warning("⚠️ Aviso ACP ID %s (%s) sin geometría. Descartado.", event_id, title[:30])
+                    active_discarded[event_id] = {
+                        "id": event_id,
+                        "title": title,
+                        "zones": zones_summary,
+                        "reason": "Sin geometría válida",
+                        "dist_km": None,
+                        "date": item.get("date"),
+                    }
                     continue
 
                 coords = parse_polygon_coords(raw_poly)
                 if not coords:
                     logger.warning("⚠️ Aviso ACP ID %s sin coordenadas legibles. Descartado.", event_id)
+                    active_discarded[event_id] = {
+                        "id": event_id,
+                        "title": title,
+                        "zones": zones_summary,
+                        "reason": "Coordenadas no legibles",
+                        "dist_km": None,
+                        "date": item.get("date"),
+                    }
                     continue
 
                 # Geospatial containment and distance check
@@ -320,6 +339,15 @@ class WeatherAlertWorker:
                     else:
                         logger.info("ℹ️ Aviso ACP ID %s ya notificado anteriormente. Omitiendo duplicado.", event_id)
                 else:
+                    active_discarded[event_id] = {
+                        "id": event_id,
+                        "title": title,
+                        "zones": zones_summary,
+                        "reason": f"Fuera de El Naudir (~{int(dist_km)} km)",
+                        "dist_km": round(dist_km, 1),
+                        "centroid": centroid,
+                        "date": item.get("date"),
+                    }
                     logger.info(
                         "ℹ️ ACP ID %s descartado: '%s' | Zonas: %s | Centroide: (%.2f, %.2f) a ~%.0f km de El Naudir | Fuera de cobertura.",
                         event_id,
@@ -329,6 +357,9 @@ class WeatherAlertWorker:
                         centroid[1],
                         dist_km,
                     )
+
+            self.current_discarded_acp = active_discarded
+            self.last_acp_check_time = time.time()
 
             # Prune seen IDs that are no longer in the active SMN ACP feed
             expired_ids = self.seen_acp_ids - current_active_ids
