@@ -165,18 +165,28 @@ class WeatherAlertWorker:
     async def _sat_monitor_loop(self) -> None:
         """Tier 1: Regional SAT polling loop."""
         while self._running:
-            logger.info("Polling SAT alerts (/alerts/type/AL) for zone '%s'...", self.target_zone)
-            alerts = await self.client.get_regional_alerts_async()
-            is_active, matched_alert = self.check_sat_matches(alerts)
+            logger.info("Polling SAT alerts for target coordinates (%s, %s) and zone '%s'...",
+                        self.target_lat, self.target_lon, self.target_zone)
+
+            # 1. Primary: Query official ws1 SMN endpoint for target coordinates
+            is_active, matched_alert = await self.client.get_location_sat_alerts_async(
+                self.target_lat, self.target_lon
+            )
+
+            # 2. Fallback: Query legacy open feed /alerts/type/AL if ws1 did not return active alert
+            if not is_active:
+                legacy_alerts = await self.client.get_regional_alerts_async()
+                is_active, matched_alert = self.check_sat_matches(legacy_alerts)
 
             self.sat_active = is_active
             self.active_sat_alert = matched_alert
 
             if self.sat_active:
+                alert_title = matched_alert.get("title") or matched_alert.get("level_name") or "Alerta Meteorológica"
                 logger.warning(
-                    "SAT state: ACTIVE for zone '%s'. Title: %s. Enabling Tier 2 radar polling.",
+                    "SAT state: ACTIVE for zone '%s'. Details: %s. Enabling Tier 2 radar polling.",
                     self.target_zone,
-                    matched_alert.get("title") if matched_alert else "N/A",
+                    alert_title,
                 )
                 self._sat_event.set()
             else:

@@ -119,13 +119,24 @@ class TelegramAlertBot:
             return
 
         count = await self.db.get_count()
-        sat_status = "Desconocido"
-        if self.worker_ref:
-            sat_status = "🔴 ACTIVO" if self.worker_ref.sat_active else "🟢 Inactivo (Normal)"
+        sat_status = "🟢 Inactivo (Sin alertas vigentes)"
+        if self.worker_ref and self.worker_ref.sat_active:
+            alert = self.worker_ref.active_sat_alert or {}
+            level = alert.get("level")
+            events = alert.get("events") or alert.get("title") or "Fenómenos severos"
+            if level == 4 or "naranja" in str(alert.get("level_name", "")).lower():
+                sat_status = f"🟠 <b>ALERTA NARANJA ({html.escape(events)})</b>"
+            elif level == 3 or "amarillo" in str(alert.get("level_name", "")).lower():
+                sat_status = f"🟡 <b>ALERTA AMARILLA ({html.escape(events)})</b>"
+            elif level == 5 or "rojo" in str(alert.get("level_name", "")).lower():
+                sat_status = f"🔴 <b>ALERTA ROJA ({html.escape(events)})</b>"
+            else:
+                sat_status = f"⚠️ <b>ACTIVO ({html.escape(events)})</b>"
 
         msg = (
             f"ℹ️ <b>Estado del Sistema - {html.escape(self.location_name)}</b>\n\n"
             f"• <b>Alerta Regional SAT:</b> {sat_status}\n"
+            f"• <b>Monitoreo Radar (ACP):</b> {'⚡ Activo (cada 3 min)' if (self.worker_ref and self.worker_ref.sat_active) else '💤 Dormido (esperando alerta)'}\n"
             f"• <b>Usuarios Suscritos:</b> {count}\n"
             f"• <b>Modo:</b> 24/7 Daemon Activo\n\n"
             "Usa /stop si deseas desuscribirte."
