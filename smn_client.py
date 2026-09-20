@@ -127,13 +127,30 @@ class SMNClient:
         if not force_refresh and self._jwt_token and now < self._token_expiry - 300:
             return self._jwt_token
 
-        # 1. Check if token is explicitly provided via environment
-        env_token = os.getenv("SMN_JWT_TOKEN")
-        if env_token and not force_refresh:
-            self._jwt_token = env_token.strip()
-            self._token_expiry = now + 86400
-            logger.info("Using SMN JWT token from environment variable.")
-            return self._jwt_token
+        # 1. Check if Scrape.do API key is configured (auto-refresh 24/7)
+        scrapedo_key = os.getenv("SCRAPEDO_API_KEY")
+        if scrapedo_key:
+            try:
+                logger.info("Fetching fresh SMN token via Scrape.do proxy...")
+                r = self.session.get(
+                    "https://api.scrape.do",
+                    params={"token": scrapedo_key, "url": "https://www.smn.gob.ar/"},
+                    timeout=self.timeout,
+                )
+                if r.status_code == 200:
+                    match = re.search(r"localStorage\.setItem\(['\"]token['\"]\s*,\s*['\"]([^'\"]+)['\"]", r.text)
+                    if match:
+                        token = match.group(1)
+                        self._jwt_token = token
+                        self._token_expiry = now + 3600
+                        logger.info("Successfully obtained SMN JWT token via Scrape.do (valid 1 hour).")
+                        return token
+                    else:
+                        logger.warning("Scrape.do returned HTML but token regex did not match.")
+                else:
+                    logger.warning("Scrape.do returned HTTP %s: %s", r.status_code, r.text[:120])
+            except Exception as err:
+                logger.warning("Scrape.do token fetch failed: %s", err)
 
         # 2. Check if a custom token relay (e.g. Cloudflare Worker) is configured
         relay_url = os.getenv("TOKEN_RELAY_URL")
@@ -152,22 +169,13 @@ class SMNClient:
             except Exception as err:
                 logger.warning("Token relay %s failed: %s", relay_url, err)
 
-        # 3. Check if Scrape.do API key is configured (free Cloudflare bypass)
-        scrapedo_key = os.getenv("SCRAPEDO_API_KEY")
-        if scrapedo_key:
-            try:
-                logger.info("Fetching token via Scrape.do proxy...")
-                r = self.session.get(f"https://api.scrape.do?token={scrapedo_key}&url=https://www.smn.gob.ar/", timeout=self.timeout)
-                if r.status_code == 200:
-                    match = re.search(r"localStorage\.setItem\(['\"]token['\"]\s*,\s*['\"]([^'\"]+)['\"]", r.text)
-                    if match:
-                        token = match.group(1)
-                        self._jwt_token = token
-                        self._token_expiry = now + 3600
-                        logger.info("Successfully obtained SMN JWT token via Scrape.do.")
-                        return token
-            except Exception as err:
-                logger.warning("Scrape.do token fetch failed: %s", err)
+        # 3. Check if manual token is explicitly provided via environment
+        env_token = os.getenv("SMN_JWT_TOKEN")
+        if env_token and not force_refresh:
+            self._jwt_token = env_token.strip()
+            self._token_expiry = now + 86400
+            logger.info("Using SMN JWT token from environment variable.")
+            return self._jwt_token
 
         logger.info("Fetching fresh SMN JWT token directly from https://www.smn.gob.ar/...")
 
