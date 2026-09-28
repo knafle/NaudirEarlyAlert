@@ -82,6 +82,53 @@ Zonas bajo aviso:
 
 ---
 
+## 🌎 ¿Cómo adaptarlo para cualquier otra localidad o barrio en Argentina?
+
+Este sistema es **100% modular y configurable**. No requiere modificar el código Python para funcionar en cualquier otro punto del país (barrios cerrados, campos agrícolas, clubes, municipios o ciudades).
+
+Solo necesitas configurar 3 variables en tu archivo `.env`:
+
+### 1. Obtener Coordenadas GPS (Latitud y Longitud)
+1. Abrí [Google Maps](https://maps.google.com).
+2. Hacé clic derecho sobre la ubicación exacta de tu barrio o casa.
+3. Copiá el primer número (Latitud) y el segundo (Longitud).
+   * *Ejemplo:* `-34.3100, -58.7391`
+
+### 2. Identificar la Zona Administrativa del SMN
+Es el nombre del **Partido o Departamento** oficial según las alertas del SMN:
+* *Ejemplos comunes:* `Escobar`, `Pilar`, `Tigre`, `San Isidro`, `La Plata`, `Rosario`, `Córdoba`, `Mar del Plata`.
+* *Auto-Resolución de ID:* El cliente consulta automáticamente la API de georeferencia del SMN (`georef/location/coord`) con tus coordenadas para obtener el ID de estación oficial más cercana (ej: `4816`).
+
+### 3. Configurar tu `.env`
+
+Editá tu `.env` con los datos de tu nueva localidad:
+
+```ini
+# Nombre que aparecerá en los mensajes de Telegram
+LOCATION_NAME=Barrio Los Alisos
+
+# Coordenadas exactas del polígono/casa
+ALERT_LAT=-34.4215
+ALERT_LON=-58.6480
+
+# Partido / Departamento oficial
+ALERT_ZONE=Tigre
+```
+
+#### Ejemplos listos para usar:
+| Ubicación | `LOCATION_NAME` | `ALERT_LAT` | `ALERT_LON` | `ALERT_ZONE` |
+| :--- | :--- | :--- | :--- | :--- |
+| **El Naudir (Escobar)** | `El Naudir` | `-34.3100` | `-58.7391` | `Escobar` |
+| **Nordelta (Tigre)** | `Nordelta` | `-34.4215` | `-58.6480` | `Tigre` |
+| **Pilar Centro (Bs. As.)** | `Pilar` | `-34.4586` | `-58.9142` | `Pilar` |
+| **Palermo (CABA)** | `Palermo` | `-34.5885` | `-58.4306` | `Capital Federal` |
+| **Rosario (Santa Fe)** | `Rosario` | `-32.9587` | `-60.6930` | `Rosario` |
+| **Córdoba Capital** | `Córdoba` | `-31.4201` | `-64.1888` | `Capital` |
+
+Reiniciás el bot (`systemctl --user restart smn-bot`) y comenzará a vigilar el nuevo punto geográfico automáticamente.
+
+---
+
 ## 🚀 Despliegue y Mantenimiento en Servidor (GCP / Ubuntu)
 
 ### 1. Requisitos Previos

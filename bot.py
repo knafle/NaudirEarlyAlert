@@ -62,6 +62,7 @@ def load_config() -> dict:
         sys.exit(1)
 
     zone = os.getenv("ALERT_ZONE", "Escobar")
+    location_name = os.getenv("LOCATION_NAME", "El Naudir")
     db_path = os.getenv("DB_PATH", "subscribers.db")
     sat_hours = float(os.getenv("SAT_POLL_INTERVAL_HOURS", "12.0"))
     acp_minutes = float(os.getenv("ACP_POLL_INTERVAL_MINUTES", "3.0"))
@@ -72,6 +73,7 @@ def load_config() -> dict:
         "lat": lat,
         "lon": lon,
         "zone": zone,
+        "location_name": location_name,
         "db_path": db_path,
         "sat_hours": sat_hours,
         "acp_minutes": acp_minutes,
@@ -84,7 +86,7 @@ async def main() -> None:
     config = load_config()
 
     logger.info("Initializing NaudirEarlyAlert Daemon...")
-    logger.info("Target: Lat=%s, Lon=%s | Admin Zone=%s", config["lat"], config["lon"], config["zone"])
+    logger.info("Target: Lat=%s, Lon=%s | Admin Zone=%s | Location Name=%s", config["lat"], config["lon"], config["zone"], config["location_name"])
     logger.info("Database path: %s", Path(config["db_path"]).resolve())
 
     # Initialize components
@@ -105,7 +107,7 @@ async def main() -> None:
     telegram_bot = TelegramAlertBot(
         token=config["token"],
         subscribers_db=db,
-        location_name="El Naudir",
+        location_name=config["location_name"],
         worker_ref=worker,
     )
 
