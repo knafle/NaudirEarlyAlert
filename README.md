@@ -115,16 +115,6 @@ ALERT_LON=-58.6480
 ALERT_ZONE=Tigre
 ```
 
-#### Ejemplos listos para usar:
-| Ubicación | `LOCATION_NAME` | `ALERT_LAT` | `ALERT_LON` | `ALERT_ZONE` |
-| :--- | :--- | :--- | :--- | :--- |
-| **El Naudir (Escobar)** | `El Naudir` | `-34.3100` | `-58.7391` | `Escobar` |
-| **Nordelta (Tigre)** | `Nordelta` | `-34.4215` | `-58.6480` | `Tigre` |
-| **Pilar Centro (Bs. As.)** | `Pilar` | `-34.4586` | `-58.9142` | `Pilar` |
-| **Palermo (CABA)** | `Palermo` | `-34.5885` | `-58.4306` | `Capital Federal` |
-| **Rosario (Santa Fe)** | `Rosario` | `-32.9587` | `-60.6930` | `Rosario` |
-| **Córdoba Capital** | `Córdoba` | `-31.4201` | `-64.1888` | `Capital` |
-
 Reiniciás el bot (`systemctl --user restart smn-bot`) y comenzará a vigilar el nuevo punto geográfico automáticamente.
 
 ---
