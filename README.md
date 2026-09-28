@@ -156,7 +156,7 @@ El bot se administra mediante un servicio de usuario de `systemd` que sobrevive 
 
 ```bash
 # Habilitar persistencia de usuario (se ejecuta una sola vez como root/ubuntu)
-sudo loginctl enable-linger knafle
+sudo loginctl enable-linger $USER
 
 # Iniciar o reiniciar el servicio
 systemctl --user restart smn-bot
