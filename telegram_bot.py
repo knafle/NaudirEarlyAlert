@@ -28,38 +28,81 @@ from subscribers import SubscribersDB
 logger = logging.getLogger(__name__)
 
 DEFAULT_RADAR_URL = "https://www.smn.gob.ar/radar"
+DEFAULT_ACP_WEB_URL = "https://www.smn.gob.ar/avisos_a_muy_corto_plazo"
 
 
 def format_acp_message(item: Dict[str, Any], location_name: str = "El Naudir") -> str:
     """Format an ACP radar alert dictionary into an HTML Telegram message."""
     raw_date = str(item.get("date") or "")
-    hora = ""
+    raw_end = str(item.get("end_date") or "")
+
+    hora_emision = ""
     if "T" in raw_date:
         try:
-            hora = raw_date.split("T")[1][:5]
+            hora_emision = raw_date.split("T")[1][:5]
         except Exception:
             pass
-    if not hora:
-        hora = str(item.get("hour") or item.get("hora") or "Reciente")
+    if not hora_emision:
+        hora_emision = str(item.get("hour") or item.get("hora") or "Reciente")
+
+    hora_fin = ""
+    if "T" in raw_end:
+        try:
+            hora_fin = raw_end.split("T")[1][:5]
+        except Exception:
+            pass
+
+    duracion_str = ""
+    if raw_date and raw_end:
+        try:
+            from datetime import datetime
+            s = datetime.fromisoformat(raw_date)
+            e = datetime.fromisoformat(raw_end)
+            diff_mins = int((e - s).total_seconds() / 60)
+            hours = diff_mins // 60
+            mins = diff_mins % 60
+            if hours > 0 and mins > 0:
+                duracion_str = f" ({hours}h {mins}m de validez)"
+            elif hours > 0:
+                duracion_str = f" ({hours} {'hora' if hours == 1 else 'horas'} de validez)"
+            elif mins > 0:
+                duracion_str = f" ({mins} min de validez)"
+        except Exception:
+            pass
+
+    # Severity level
+    sev = str(item.get("severity") or "").upper().strip()
+    sev_text = ""
+    if sev == "N":
+        sev_text = "🟠 <b>Severidad:</b> Naranja (Tormentas fuertes / severas)\n"
+    elif sev == "A":
+        sev_text = "🟡 <b>Severidad:</b> Amarillo (Tormentas fuertes)\n"
+    elif sev == "R":
+        sev_text = "🔴 <b>Severidad:</b> Rojo (Tormentas excepcionales)\n"
 
     titulo = str(item.get("title") or item.get("titulo") or item.get("description") or "Tormentas severas").strip()
     detalle = html.escape(titulo)
 
-    # Resolve radar animated GIF or link
+    # Resolve radar and satellite images
     radar_url = None
+    topes_url = None
     images = item.get("images")
     if isinstance(images, list):
         for img in images:
             if isinstance(img, dict) and img.get("url"):
                 title_img = str(img.get("title", "")).lower()
-                if "ezeiza" in title_img or "general" in title_img:
-                    radar_url = img["url"]
-                    break
+                if "topes" in title_img or "goes16" in title_img:
+                    topes_url = img["url"]
+                elif "ezeiza" in title_img or "general" in title_img:
+                    if not radar_url:
+                        radar_url = img["url"]
         if not radar_url:
             for img in images:
                 if isinstance(img, dict) and img.get("url"):
-                    radar_url = img["url"]
-                    break
+                    title_img = str(img.get("title", "")).lower()
+                    if "topes" not in title_img and "goes16" not in title_img:
+                        radar_url = img["url"]
+                        break
 
     if not radar_url:
         radar_url = (
@@ -73,17 +116,34 @@ def format_acp_message(item: Dict[str, Any], location_name: str = "El Naudir") -
     zones = item.get("zones")
     zones_text = ""
     if zones and isinstance(zones, list):
-        filtered_zones = [z.strip() for z in zones if z.strip()][:3]
+        filtered_zones = [z.strip() for z in zones if z.strip()][:4]
         if filtered_zones:
             zones_text = "<b>Zonas bajo aviso:</b>\n" + "\n".join(f"• {html.escape(z)}" for z in filtered_zones) + "\n\n"
 
+    vigencia_line = ""
+    if hora_fin:
+        vigencia_line = f"⏳ <b>Vigencia:</b> Hasta las {html.escape(hora_fin)} hs{duracion_str}\n"
+    elif duracion_str:
+        vigencia_line = f"⏳ <b>Vigencia:</b>{duracion_str}\n"
+
+    links = [
+        f'📡 <a href="{radar_url}">Ver radar en vivo (animación oficial)</a>'
+    ]
+    if topes_url:
+        links.append(f'🛰️ <a href="{html.escape(str(topes_url).strip())}">Ver satélite GOES-16 (Topes nubosos)</a>')
+    links.append(f'🌐 <a href="{DEFAULT_ACP_WEB_URL}">Ver Avisos a Muy Corto Plazo en SMN</a>')
+
+    links_text = "\n".join(links)
+
     message = (
         f"⚠️ <b>ALERTA METEOROLÓGICA (ACP)</b> ⚠️\n\n"
-        f"<b>Emisión:</b> {html.escape(hora)}\n"
-        f"<b>Detalle:</b> {detalle}\n\n"
+        f"⚡ <b>Fenómeno:</b> {detalle}\n"
+        f"{sev_text}"
+        f"⏱️ <b>Emisión:</b> {html.escape(hora_emision)} hs\n"
+        f"{vigencia_line}\n"
         f"{zones_text}"
         f"📍 <i>Tormenta severa detectada sobre nuestras coordenadas ({html.escape(location_name)}).</i>\n\n"
-        f'🔗 <a href="{radar_url}">Ver radar oficial</a>'
+        f"{links_text}"
     )
     return message
 
@@ -232,15 +292,26 @@ class TelegramAlertBot:
                 zones = zones[:87] + "..."
             zones_esc = html.escape(zones)
 
+            vigencia_info = ""
+            end_date = data.get("end_date")
+            if end_date and "T" in str(end_date):
+                try:
+                    hora_fin = str(end_date).split("T")[1][:5]
+                    vigencia_info = f"• <b>Vigencia:</b> Hasta las {html.escape(hora_fin)} hs\n"
+                except Exception:
+                    pass
+
             lines.append(
                 f"<b>{idx}. ID {html.escape(str(event_id))}:</b> {title}\n"
                 f"• <b>Zonas:</b> {zones_esc}\n"
+                f"{vigencia_info}"
                 f"• <b>Motivo de descarte:</b> ❌ {reason}\n"
             )
 
         lines.append(
             f"📍 <i>Coordenadas protegidas: {html.escape(self.location_name)} (-34.3100, -58.7391).</i>\n"
-            "💡 <i>Si cualquier celda de tormenta se desplaza hacia El Naudir, el bot te alertará al instante.</i>"
+            "💡 <i>Si cualquier celda de tormenta se desplaza hacia El Naudir, el bot te alertará al instante.</i>\n\n"
+            f'🌐 <a href="{DEFAULT_ACP_WEB_URL}">Ver mapa de Avisos a Muy Corto Plazo en SMN</a>'
         )
 
         msg = "\n".join(lines)

@@ -187,6 +187,28 @@ class TestTelegramMessageFormatting(unittest.TestCase):
         self.assertIn("El Naudir", msg)
         self.assertIn("https://ws.smn.gob.ar/alerts/radar/anim.gif", msg)
         self.assertIn("⚠️ <b>ALERTA METEOROLÓGICA (ACP)</b> ⚠️", msg)
+        self.assertIn("https://www.smn.gob.ar/avisos_a_muy_corto_plazo", msg)
+
+    def test_format_acp_message_with_duration_and_severity(self) -> None:
+        item = {
+            "date": "2026-09-28T07:30:00-03:00",
+            "end_date": "2026-09-28T09:30:00-03:00",
+            "severity": "N",
+            "title": "Tormentas fuertes con ocasional caída de granizo",
+            "zones": ["BUENOS AIRES: Escobar - Campana."],
+            "images": [
+                {"title": "gmp_ezeiza", "url": "https://estaticos.smn.gob.ar/aviso.gif"},
+                {"title": "topes_nubosos", "url": "https://estaticos.smn.gob.ar/TOP_C13.jpg"}
+            ]
+        }
+        msg = format_acp_message(item, location_name="El Naudir")
+        self.assertIn("07:30 hs", msg)
+        self.assertIn("09:30 hs", msg)
+        self.assertIn("2 horas de validez", msg)
+        self.assertIn("Naranja", msg)
+        self.assertIn("https://estaticos.smn.gob.ar/aviso.gif", msg)
+        self.assertIn("https://estaticos.smn.gob.ar/TOP_C13.jpg", msg)
+        self.assertIn("https://www.smn.gob.ar/avisos_a_muy_corto_plazo", msg)
 
 
 class TestWorkerIntegration(unittest.TestCase):

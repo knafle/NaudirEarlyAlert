@@ -348,6 +348,8 @@ class WeatherAlertWorker:
                         "dist_km": round(dist_km, 1),
                         "centroid": centroid,
                         "date": item.get("date"),
+                        "end_date": item.get("end_date"),
+                        "severity": item.get("severity"),
                     }
                     logger.info(
                         "ℹ️ ACP ID %s descartado: '%s' | Zonas: %s | Centroide: (%.2f, %.2f) a ~%.0f km de El Naudir | Fuera de cobertura.",
