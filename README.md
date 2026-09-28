@@ -128,28 +128,12 @@ Reiniciás el bot (`systemctl --user restart smn-bot`) y comenzará a vigilar el
 * Token opcional de Scrape.do para auto-renovación de JWT (1.000 requests/mes gratis)
 
 ### 2. Configurar Variables de Entorno (`.env`)
-```ini
-# Token del Bot de Telegram (@BotFather)
-TELEGRAM_BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN_HERE
-
-# Coordenadas El Naudir - Escobar
-ALERT_LAT=-34.3100
-ALERT_LON=-58.7391
-ALERT_ZONE=Escobar
-
-# Base de datos SQLite
-DB_PATH=subscribers.db
-
-# Intervalos de consulta recomendados
-SAT_POLL_INTERVAL_HOURS=0.5
-ACP_POLL_INTERVAL_MINUTES=3.0
-
-# Opcional: API Key de Scrape.do para bypass de Cloudflare 24/7
-SCRAPEDO_API_KEY=tu_token_aqui
-
-# Forzar consulta de radar incluso sin alerta SAT (útil para pruebas)
-FORCE_ACP_POLL=false
+Creá tu archivo `.env` a partir de la plantilla y completá tus variables:
+```bash
+cp .env.example .env
+nano .env
 ```
+*(Completá tu `TELEGRAM_BOT_TOKEN`, coordenadas y zona según la sección anterior).*
 
 ### 3. Servicio Autónomo 24/7 (`systemd`)
 El bot se administra mediante un servicio de usuario de `systemd` que sobrevive a cierres de sesión SSH y reinicios de la máquina virtual gracias a `linger`:
