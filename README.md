@@ -10,24 +10,43 @@
 - **Latitud:** `-34.3100`
 - **Longitud:** `-58.7391`
 - **Zona Administrativa SAT:** `"Escobar"`
+- **SMN Location ID:** `4816` (Parque El Cazador / Escobar)
 
 ---
 
-## ⚙️ Arquitectura del Sistema (Máquina de Estados de 2 Niveles)
+## ⚙️ Arquitectura del Sistema (2-Tier State Machine)
 
-El daemon optimiza el consumo de ancho de banda y procesamiento mediante un flujo inteligente de dos niveles:
+El daemon optimiza el consumo de ancho de banda y cuotas de API mediante un flujo inteligente de dos niveles:
+
+```mermaid
+graph TD
+    A[Inicio Daemon 24/7] --> B[Nivel 1: Consulta SAT Regional]
+    B -->|ws1.smn.gob.ar con JWT| C{¿Alerta activa en Escobar?}
+    C -->|No / Verde| D[Estado INACTIVO: Radar dormido]
+    D -->|Espera intervalo SAT 30m| B
+    C -->|Sí: Amarillo / Naranja / Rojo| E[Estado ACTIVO: Despierta Nivel 2]
+    E --> F[Nivel 2: Consulta Radar ACP cada 3m]
+    F --> G{¿Polígono cubre El Naudir?}
+    G -->|No: Fuera de cobertura| H[Registra en /descartes con distancia en km]
+    H -->|Espera 3m| F
+    G -->|Sí: Sobre El Naudir| I{¿Ya notificado?}
+    I -->|Sí| J[Ignora duplicado]
+    I -->|No| K[🚨 Difusión Inmediata HTML a Suscriptores]
+    K --> F
+```
 
 1. **Nivel 1 – Alertas Regionales (SAT):**
-   - Consulta el endpoint público `https://ws.smn.gob.ar/alerts/type/AL` al iniciar y cada **12 horas**.
+   - Consulta el endpoint oficial de geolocalización `ws1.smn.gob.ar/warning/alert/location/4816` (con fallback a feed abierto).
    - Analiza si el partido de **Escobar** se encuentra bajo alerta meteorológica (amarillo, naranja o rojo).
    - Si no hay alertas activas, el monitoreo por radar se mantiene **dormido** para evitar tráfico innecesario.
-   - Si se detecta alerta activa en la zona, el estado pasa a **ACTIVO**.
+   - Si se detecta alerta activa en la zona, el estado pasa a **ACTIVO** y despierta inmediatamente el Nivel 2.
 
 2. **Nivel 2 – Avisos a Muy Corto Plazo por Radar (ACP):**
-   - Cuando el estado SAT está activo, consulta `https://ws.smn.gob.ar/alerts/type/ACP` cada **3 minutos**.
-   - **Geometría Espacial (Shapely):** Parsea el polígono de coordenadas de cada celda de tormenta y evalúa si las coordenadas de El Naudir se encuentran **dentro** (`Polygon.contains(Point)`).
-   - **Deduplicación:** Registra los IDs de celdas ya notificadas en memoria para no repetir alertas del mismo evento.
+   - Cuando el estado SAT está activo, consulta `ws1.smn.gob.ar/warning/shortterm/` cada **3 a 5 minutos**.
+   - **Geometría Espacial (Shapely):** Parsea el polígono exacto de la celda de tormenta y evalúa si las coordenadas de El Naudir se encuentran **dentro** (`Polygon.contains(Point)`).
+   - **Deduplicación Persistente:** Registra los IDs de celdas ya notificadas en memoria y SQLite para no repetir alertas del mismo evento.
    - **Difusión Inmediata:** Si una tormenta intersecta El Naudir, emite la alerta con formato HTML a todos los usuarios suscritos vía Telegram.
+   - **Bypass de Cloudflare:** Utiliza renovación automática de Token JWT vía proxy (Scrape.do) cada 1 hora (~720 requests/mes, dentro de la cuota gratuita de 1.000).
 
 ---
 
@@ -36,144 +55,97 @@ El daemon optimiza el consumo de ancho de banda y procesamiento mediante un fluj
 | Comando | Descripción |
 | :--- | :--- |
 | `/start` | Suscribe al usuario para recibir alertas de tormentas en El Naudir. |
-| `/stop` | Cancela la suscripción y elimina al usuario de la base de datos. |
-| `/estado` | Muestra el estado del daemon, estado de alerta SAT y total de suscriptores. |
+| `/stop` | Cancela la suscripción y elimina al usuario de la lista de difusión. |
+| `/estado` | Muestra el estado del daemon, alerta SAT actual, modo de radar y suscriptores. |
+| `/descartes` | Lista tormentas vigentes en la región descartadas por estar fuera de cobertura (con distancia en km). |
+| `/prueba` | Envía una alerta de simulación realista **únicamente a tu chat** (no notifica a los demás). |
 | `/help` | Muestra la ayuda y lista de comandos disponibles. |
 
 ### Formato de Alerta Difundida
 ```html
 ⚠️ ALERTA METEOROLÓGICA (ACP) ⚠️
 
-Emisión: 14:15
-Detalle: Tormentas fuertes con ráfagas y ocasional caída de granizo
-Duración: Válido por 3 horas desde su emisión
+⚡ Fenómeno: TORMENTAS FUERTES CON LLUVIAS INTENSAS Y OCASIONAL CAIDA DE GRANIZO
+🟠 Severidad: Naranja (Tormentas fuertes / severas)
+⏱️ Emisión: 07:38 hs
+⏳ Vigencia: Hasta las 09:38 hs (2 horas de validez)
+
+Zonas bajo aviso:
+• BUENOS AIRES: Escobar - Campana - Pilar - Tigre.
 
 📍 Tormenta severa detectada sobre nuestras coordenadas (El Naudir).
 
-🔗 Ver radar oficial
+📡 Ver radar en vivo (animación oficial)
+🛰️ Ver satélite GOES-16 (Topes nubosos)
+🌐 Ver Avisos a Muy Corto Plazo en SMN
 ```
 
 ---
 
-## 🚀 Guía de Despliegue en Servidor Linux (Ubuntu 24.04 LTS / GCP e2-micro)
+## 🚀 Despliegue y Mantenimiento en Servidor (GCP / Ubuntu)
 
-### 1. Preparar el Servidor y Dependencias del Sistema
+### 1. Requisitos Previos
+* Python 3.10+
+* Virtualenv (`python3-venv`)
+* Token de Telegram obtenido en `@BotFather`
+* Token opcional de Scrape.do para auto-renovación de JWT (1.000 requests/mes gratis)
 
-Conéctate por SSH a tu máquina virtual e instala Python 3 y `venv`:
-
-```bash
-sudo apt update && sudo apt install -y python3 python3-pip python3-venv git
-```
-
-### 2. Clonar el Repositorio
-
-```bash
-sudo git clone https://github.com/tu-usuario/NaudirEarlyAlert.git /opt/NaudirEarlyAlert
-sudo chown -R ubuntu:ubuntu /opt/NaudirEarlyAlert
-cd /opt/NaudirEarlyAlert
-```
-
-*(Si utilizas otro usuario distinto a `ubuntu`, reemplaza `ubuntu:ubuntu` por tu usuario actual).*
-
-### 3. Crear Entorno Virtual e Instalar Dependencias
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-### 4. Configurar Variables de Entorno
-
-Copia la plantilla y configura tu token de Telegram:
-
-```bash
-cp .env.example .env
-nano .env
-```
-
-Contenido del archivo `.env`:
+### 2. Configurar Variables de Entorno (`.env`)
 ```ini
-TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrSTUvwxYZ
+# Token del Bot de Telegram (@BotFather)
+TELEGRAM_BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN_HERE
+
+# Coordenadas El Naudir - Escobar
 ALERT_LAT=-34.3100
 ALERT_LON=-58.7391
 ALERT_ZONE=Escobar
+
+# Base de datos SQLite
 DB_PATH=subscribers.db
-SAT_POLL_INTERVAL_HOURS=12
-ACP_POLL_INTERVAL_MINUTES=3
+
+# Intervalos de consulta recomendados
+SAT_POLL_INTERVAL_HOURS=0.5
+ACP_POLL_INTERVAL_MINUTES=3.0
+
+# Opcional: API Key de Scrape.do para bypass de Cloudflare 24/7
+SCRAPEDO_API_KEY=tu_token_aqui
+
+# Forzar consulta de radar incluso sin alerta SAT (útil para pruebas)
 FORCE_ACP_POLL=false
 ```
 
-### 5. Probar el Funcionamiento
-
-Ejecuta el script de prueba para validar que la geometría, la base de datos y la plantilla funcionen:
+### 3. Servicio Autónomo 24/7 (`systemd`)
+El bot se administra mediante un servicio de usuario de `systemd` que sobrevive a cierres de sesión SSH y reinicios de la máquina virtual gracias a `linger`:
 
 ```bash
-# Prueba simulada sin enviar mensajes a Telegram:
-venv/bin/python test_alert.py --dry-run
+# Habilitar persistencia de usuario (se ejecuta una sola vez como root/ubuntu)
+sudo loginctl enable-linger knafle
 
-# Prueba enviando un mensaje real a tu chat de Telegram:
-venv/bin/python test_alert.py --chat-id TU_CHAT_ID_DE_TELEGRAM
+# Iniciar o reiniciar el servicio
+systemctl --user restart smn-bot
+
+# Ver logs en vivo
+journalctl --user -u smn-bot -f
+
+# Ver estado
+systemctl --user status smn-bot
+```
+
+### 4. Actualización Rápida de Versión
+Para aplicar actualizaciones subidas al repositorio:
+```bash
+cd ~/NaudirEarlyAlert && git pull && systemctl --user restart smn-bot
 ```
 
 ---
 
-## 🛡️ Configuración como Servicio 24/7 con `systemd`
+## 🧪 Pruebas Automatizadas
 
-Para garantizar que el bot se ejecute continuamente de fondo y se reinicie automáticamente ante caídas o reinicios del servidor:
-
-### 1. Copiar el Archivo de Servicio
-
-```bash
-sudo cp /opt/NaudirEarlyAlert/smn-bot.service /etc/systemd/system/
-```
-
-Verifica que el usuario y las rutas en `/etc/systemd/system/smn-bot.service` coincidan con tu instalación:
-```ini
-User=ubuntu
-WorkingDirectory=/opt/NaudirEarlyAlert
-ExecStart=/opt/NaudirEarlyAlert/venv/bin/python bot.py
-```
-
-### 2. Habilitar e Iniciar el Servicio
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable smn-bot
-sudo systemctl start smn-bot
-```
-
-### 3. Comandos Útiles de Administración
-
-- **Ver estado del servicio:**
-  ```bash
-  sudo systemctl status smn-bot
-  ```
-
-- **Ver logs en tiempo real:**
-  ```bash
-  journalctl -u smn-bot -f
-  ```
-
-- **Reiniciar el bot:**
-  ```bash
-  sudo systemctl restart smn-bot
-  ```
-
-- **Detener el bot:**
-  ```bash
-  sudo systemctl stop smn-bot
-  ```
-
----
-
-## 🧪 Pruebas Unitarias y Automatizadas
-
-El proyecto incluye tests integrados para validar:
-- Contención espacial de polígonos mediante `shapely`.
-- Operaciones seguras y concurrentes en base de datos SQLite `subscribers.db`.
-- Aislamiento de excepciones y desuscripción automática de usuarios bloqueados.
+El proyecto cuenta con una suite completa de tests unitarios:
+- Verificación geométrica de polígonos GeoJSON / coordenadas SMN (`shapely`).
+- Deduplicación de avisos y persistencia en SQLite.
+- Cálculo de duración y formato de mensajes HTML.
+- Filtrado y descarte de tormentas lejanas.
 
 Ejecutar tests:
 ```bash
@@ -185,4 +157,4 @@ python -m unittest discover tests/
 ## 📄 Licencia
 
 Desarrollado para la comunidad de **El Naudir – Aguas Privadas**.
-Distribuido bajo la licencia MIT.
+Distribuido bajo licencia MIT.
