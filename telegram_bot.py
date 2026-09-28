@@ -171,6 +171,7 @@ class TelegramAlertBot:
         self.application.add_handler(CommandHandler("stop", self._cmd_stop))
         self.application.add_handler(CommandHandler("estado", self._cmd_estado))
         self.application.add_handler(CommandHandler(["descartes", "avisos", "radar"], self._cmd_descartes))
+        self.application.add_handler(CommandHandler(["prueba", "test", "testalert"], self._cmd_prueba))
         self.application.add_handler(CommandHandler("help", self._cmd_help))
         self.application.add_error_handler(self._error_handler)
 
@@ -317,6 +318,49 @@ class TelegramAlertBot:
         msg = "\n".join(lines)
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
+    async def _cmd_prueba(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Send a simulated ACP storm alert ONLY to the user invoking the command."""
+        if not update.effective_chat:
+            return
+
+        from datetime import datetime, timedelta
+        now = datetime.now()
+        start_iso = now.isoformat()
+        end_iso = (now + timedelta(hours=2)).isoformat()
+
+        # Build realistic sample data with duration, severity, radar and satellite
+        sample_item = {
+            "title": "TORMENTAS FUERTES CON LLUVIAS INTENSAS, RAFAGAS Y OCASIONAL CAIDA DE GRANIZO",
+            "date": start_iso,
+            "end_date": end_iso,
+            "severity": "N",
+            "zones": [
+                "BUENOS AIRES: Escobar - Campana - Pilar - Tigre.",
+                "DELTA DE BUENOS AIRES: Islas del Delta."
+            ],
+            "images": [
+                {"title": "gmp_ezeiza", "url": "https://estaticos.smn.gob.ar/pronosticos/avisomet/radar/ezeiza.gif"},
+                {"title": "topes_nubosos", "url": "https://estaticos.smn.gob.ar/vmsr/goes16/TOP_C13_NOR.jpg"}
+            ]
+        }
+
+        # If there are real active ACP warnings in the country, adopt real title and severity
+        if self.worker_ref and hasattr(self.worker_ref, "current_discarded_acp"):
+            discarded = self.worker_ref.current_discarded_acp
+            if discarded:
+                real_storm = next(iter(discarded.values()))
+                if real_storm.get("title"):
+                    sample_item["title"] = real_storm["title"]
+                if real_storm.get("severity"):
+                    sample_item["severity"] = real_storm["severity"]
+
+        alert_msg = format_acp_message(sample_item, location_name=self.location_name)
+        banner = (
+            "🧪 <b>[MENSAJE DE PRUEBA]</b>\n"
+            "<i>Esta alerta es de simulación y fue enviada ÚNICAMENTE a tu chat privado (no a los demás suscriptores).</i>\n\n"
+        )
+        await update.message.reply_text(banner + alert_msg, parse_mode=ParseMode.HTML)
+
     async def _cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /help command."""
         if not update.effective_chat:
@@ -328,6 +372,7 @@ class TelegramAlertBot:
             "/stop - Cancelar tu suscripción\n"
             "/estado - Ver el estado actual del monitoreo y alertas SAT\n"
             "/descartes - Ver avisos ACP activos actualmente descartados (fuera del barrio)\n"
+            "/prueba - Recibir una alerta de prueba (se envía SOLO a vos)\n"
             "/help - Mostrar esta ayuda"
         )
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
