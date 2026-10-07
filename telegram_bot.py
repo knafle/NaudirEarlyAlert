@@ -83,35 +83,34 @@ def format_acp_message(item: Dict[str, Any], location_name: str = "El Naudir") -
     titulo = str(item.get("title") or item.get("titulo") or item.get("description") or "Tormentas severas").strip()
     detalle = html.escape(titulo)
 
-    # Resolve radar and satellite images
-    radar_url = None
+    # Resolve radar and satellite images (prioritizing close-up / zoom zonal over far away)
+    radar_cerca_url = None
+    radar_general_url = None
     topes_url = None
     images = item.get("images")
     if isinstance(images, list):
         for img in images:
             if isinstance(img, dict) and img.get("url"):
-                title_img = str(img.get("title", "")).lower()
-                if "topes" in title_img or "goes16" in title_img:
-                    topes_url = img["url"]
-                elif "ezeiza" in title_img or "general" in title_img:
-                    if not radar_url:
-                        radar_url = img["url"]
-        if not radar_url:
-            for img in images:
-                if isinstance(img, dict) and img.get("url"):
-                    title_img = str(img.get("title", "")).lower()
-                    if "topes" not in title_img and "goes16" not in title_img:
-                        radar_url = img["url"]
-                        break
+                t = str(img.get("title", "")).lower()
+                u = str(img.get("url", "")).strip()
+                if "topes" in t or "goes" in t:
+                    topes_url = u
+                elif "general" in t or "gral" in t or "avi_gral" in u.lower():
+                    radar_general_url = u
+                else:
+                    # Specific radar station / close-up zoom (e.g. gmp_ezeiza, aviso.gif)
+                    if not radar_cerca_url:
+                        radar_cerca_url = u
 
-    if not radar_url:
-        radar_url = (
-            item.get("gmp_general")
-            or item.get("gmp")
+    # Fallback resolution
+    if not radar_cerca_url and not radar_general_url:
+        radar_fallback = (
+            item.get("gmp")
+            or item.get("gmp_general")
             or item.get("url")
             or DEFAULT_RADAR_URL
         )
-    radar_url = html.escape(str(radar_url).strip())
+        radar_cerca_url = str(radar_fallback).strip()
 
     zones = item.get("zones")
     zones_text = ""
@@ -126,11 +125,13 @@ def format_acp_message(item: Dict[str, Any], location_name: str = "El Naudir") -
     elif duracion_str:
         vigencia_line = f"⏳ <b>Vigencia:</b>{duracion_str}\n"
 
-    links = [
-        f'📡 <a href="{radar_url}">Ver radar en vivo (animación oficial)</a>'
-    ]
+    links = []
+    if radar_cerca_url:
+        links.append(f'📡 <a href="{html.escape(radar_cerca_url)}">Ver radar de cerca (zoom zonal)</a>')
+    if radar_general_url:
+        links.append(f'🗺️ <a href="{html.escape(radar_general_url)}">Ver mapa general (regional)</a>')
     if topes_url:
-        links.append(f'🛰️ <a href="{html.escape(str(topes_url).strip())}">Ver satélite GOES-16 (Topes nubosos)</a>')
+        links.append(f'🛰️ <a href="{html.escape(topes_url)}">Ver satélite GOES-16 (Topes nubosos)</a>')
     links.append(f'🌐 <a href="{DEFAULT_ACP_WEB_URL}">Ver Avisos a Muy Corto Plazo en SMN</a>')
 
     links_text = "\n".join(links)
@@ -340,11 +341,12 @@ class TelegramAlertBot:
             ],
             "images": [
                 {"title": "gmp_ezeiza", "url": "https://estaticos.smn.gob.ar/pronosticos/avisomet/radar/ezeiza.gif"},
+                {"title": "gmp_general", "url": "https://estaticos.smn.gob.ar/pronosticos/avisomet/radar/avi_gral.gif"},
                 {"title": "topes_nubosos", "url": "https://estaticos.smn.gob.ar/vmsr/goes16/TOP_C13_NOR.jpg"}
             ]
         }
 
-        # If there are real active ACP warnings in the country, adopt real title and severity
+        # If there are real active ACP warnings in the country, adopt real title, severity, and images
         if self.worker_ref and hasattr(self.worker_ref, "current_discarded_acp"):
             discarded = self.worker_ref.current_discarded_acp
             if discarded:
@@ -353,6 +355,8 @@ class TelegramAlertBot:
                     sample_item["title"] = real_storm["title"]
                 if real_storm.get("severity"):
                     sample_item["severity"] = real_storm["severity"]
+                if real_storm.get("images"):
+                    sample_item["images"] = real_storm["images"]
 
         alert_msg = format_acp_message(sample_item, location_name=self.location_name)
         banner = (

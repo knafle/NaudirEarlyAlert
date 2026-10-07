@@ -197,6 +197,7 @@ class TestTelegramMessageFormatting(unittest.TestCase):
             "title": "Tormentas fuertes con ocasional caída de granizo",
             "zones": ["BUENOS AIRES: Escobar - Campana."],
             "images": [
+                {"title": "gmp_general", "url": "https://estaticos.smn.gob.ar/avi_gral.gif"},
                 {"title": "gmp_ezeiza", "url": "https://estaticos.smn.gob.ar/aviso.gif"},
                 {"title": "topes_nubosos", "url": "https://estaticos.smn.gob.ar/TOP_C13.jpg"}
             ]
@@ -206,7 +207,10 @@ class TestTelegramMessageFormatting(unittest.TestCase):
         self.assertIn("09:30 hs", msg)
         self.assertIn("2 horas de validez", msg)
         self.assertIn("Naranja", msg)
+        self.assertIn("Ver radar de cerca (zoom zonal)", msg)
         self.assertIn("https://estaticos.smn.gob.ar/aviso.gif", msg)
+        self.assertIn("Ver mapa general (regional)", msg)
+        self.assertIn("https://estaticos.smn.gob.ar/avi_gral.gif", msg)
         self.assertIn("https://estaticos.smn.gob.ar/TOP_C13.jpg", msg)
         self.assertIn("https://www.smn.gob.ar/avisos_a_muy_corto_plazo", msg)
 

@@ -115,8 +115,6 @@ ALERT_LON=-58.6480
 ALERT_ZONE=Tigre
 ```
 
-Reiniciás el bot (`systemctl --user restart smn-bot`) y comenzará a vigilar el nuevo punto geográfico automáticamente.
-
 ---
 
 ## 🚀 Despliegue y Mantenimiento en Servidor (GCP / Ubuntu)
