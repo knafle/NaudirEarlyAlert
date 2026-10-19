@@ -147,7 +147,7 @@ class RiverClient:
         self.timeout = timeout
         self.cache_ttl = cache_ttl_seconds
         self.verify_ssl = verify_ssl
-        self.scrapedo_key = scrapedo_key or os.getenv("SCRAPEDO_API_KEY")
+        self.scrapedo_key = scrapedo_key or os.getenv("RIVER_SCRAPEDO_API_KEY") or os.getenv("SCRAPEDO_API_KEY")
         self.proxy_url = proxy_url or os.getenv("RIVER_PROXY_URL")
 
         self.session = requests.Session()

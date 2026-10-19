@@ -99,6 +99,11 @@ async def main() -> None:
     db = SubscribersDB(db_path=config["db_path"])
     smn_client = SMNClient()
     river_client = RiverClient()
+    if river_client.scrapedo_key:
+        is_dedicated = bool(os.getenv("RIVER_SCRAPEDO_API_KEY"))
+        logger.info("RiverClient initialized with Scrape.do proxy (%s key).", "dedicated RIVER_SCRAPEDO_API_KEY" if is_dedicated else "shared SCRAPEDO_API_KEY")
+    else:
+        logger.info("RiverClient initialized in direct fetch mode.")
 
     worker = WeatherAlertWorker(
         smn_client=smn_client,
