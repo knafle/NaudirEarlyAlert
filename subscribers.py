@@ -55,6 +55,18 @@ class SubscribersDB:
                 );
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS notified_river_alerts (
+                    alert_key TEXT PRIMARY KEY,
+                    station_name TEXT,
+                    alert_type TEXT,
+                    severity_level TEXT,
+                    water_level REAL,
+                    notified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                """
+            )
         logger.info("Initialized subscribers database at %s", self.db_path)
 
     # Synchronous methods
@@ -139,6 +151,42 @@ class SubscribersDB:
             )
             return cursor.rowcount
 
+    def is_river_alert_notified_sync(self, alert_key: str) -> bool:
+        """Check if a river alert key was already notified."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT 1 FROM notified_river_alerts WHERE alert_key = ? LIMIT 1",
+                (str(alert_key),),
+            )
+            return cursor.fetchone() is not None
+
+    def mark_river_alert_notified_sync(
+        self,
+        alert_key: str,
+        station_name: str,
+        alert_type: str,
+        severity_level: str,
+        water_level: Optional[float] = None,
+    ) -> None:
+        """Record a river alert key as notified."""
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO notified_river_alerts
+                (alert_key, station_name, alert_type, severity_level, water_level)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (str(alert_key), station_name, alert_type, severity_level, water_level),
+            )
+
+    def prune_old_river_alerts_sync(self, hours: int = 48) -> int:
+        """Prune river alert records older than specified hours."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                f"DELETE FROM notified_river_alerts WHERE notified_at < datetime('now', '-{hours} hours')"
+            )
+            return cursor.rowcount
+
     # Asynchronous non-blocking wrappers
     async def add_subscriber(self, chat_id: int) -> bool:
         """Async wrapper for add_subscriber_sync."""
@@ -159,3 +207,25 @@ class SubscribersDB:
     async def get_count(self) -> int:
         """Async wrapper for get_count_sync."""
         return await asyncio.to_thread(self.get_count_sync)
+
+    async def is_river_alert_notified(self, alert_key: str) -> bool:
+        """Async wrapper for is_river_alert_notified_sync."""
+        return await asyncio.to_thread(self.is_river_alert_notified_sync, alert_key)
+
+    async def mark_river_alert_notified(
+        self,
+        alert_key: str,
+        station_name: str,
+        alert_type: str,
+        severity_level: str,
+        water_level: Optional[float] = None,
+    ) -> None:
+        """Async wrapper for mark_river_alert_notified_sync."""
+        await asyncio.to_thread(
+            self.mark_river_alert_notified_sync,
+            alert_key,
+            station_name,
+            alert_type,
+            severity_level,
+            water_level,
+        )

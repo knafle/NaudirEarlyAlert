@@ -16,6 +16,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from river_client import RiverClient
+from river_worker import RiverAlertWorker
 from smn_client import SMNClient
 from subscribers import SubscribersDB
 from telegram_bot import TelegramAlertBot
@@ -67,6 +69,8 @@ def load_config() -> dict:
     sat_hours = float(os.getenv("SAT_POLL_INTERVAL_HOURS", "12.0"))
     acp_minutes = float(os.getenv("ACP_POLL_INTERVAL_MINUTES", "3.0"))
     force_acp = os.getenv("FORCE_ACP_POLL", "false").lower() in ("true", "1", "yes")
+    river_minutes = float(os.getenv("RIVER_POLL_INTERVAL_MINUTES", "45.0"))
+    enable_river = os.getenv("ENABLE_RIVER_MONITORING", "true").lower() in ("true", "1", "yes")
 
     return {
         "token": token,
@@ -78,6 +82,8 @@ def load_config() -> dict:
         "sat_hours": sat_hours,
         "acp_minutes": acp_minutes,
         "force_acp": force_acp,
+        "river_minutes": river_minutes,
+        "enable_river": enable_river,
     }
 
 
@@ -92,6 +98,7 @@ async def main() -> None:
     # Initialize components
     db = SubscribersDB(db_path=config["db_path"])
     smn_client = SMNClient()
+    river_client = RiverClient()
 
     worker = WeatherAlertWorker(
         smn_client=smn_client,
@@ -104,15 +111,35 @@ async def main() -> None:
         subscribers_db=db,
     )
 
+    river_worker = None
+    if config["enable_river"]:
+        river_worker = RiverAlertWorker(
+            river_client=river_client,
+            poll_interval_minutes=config["river_minutes"],
+            subscribers_db=db,
+            location_name=config["location_name"],
+        )
+        logger.info(
+            "River flood alerts enabled (Escobar: Street=%.2fm, House=%.2fm | Tigre: Street=%.2fm, House=%.2fm)",
+            river_worker.street_cota_escobar,
+            river_worker.house_cota_escobar,
+            river_worker.street_cota_tigre,
+            river_worker.house_cota_tigre,
+        )
+
     telegram_bot = TelegramAlertBot(
         token=config["token"],
         subscribers_db=db,
         location_name=config["location_name"],
         worker_ref=worker,
+        river_worker_ref=river_worker,
+        river_client_ref=river_client,
     )
 
-    # Wire worker callback to Telegram alert broadcaster
+    # Wire worker callbacks to Telegram alert broadcaster
     worker.broadcast_callback = telegram_bot.broadcast_alert
+    if river_worker:
+        river_worker.broadcast_callback = telegram_bot.broadcast_river_alert
 
     # Setup shutdown event
     stop_event = asyncio.Event()
@@ -146,6 +173,11 @@ async def main() -> None:
     worker_task = asyncio.create_task(worker.start(), name="WeatherAlertWorker")
     logger.info("WeatherAlertWorker background task started.")
 
+    river_worker_task = None
+    if river_worker:
+        river_worker_task = asyncio.create_task(river_worker.start(), name="RiverAlertWorker")
+        logger.info("RiverAlertWorker background task started.")
+
     try:
         # Wait until stop event is triggered
         await stop_event.wait()
@@ -157,6 +189,15 @@ async def main() -> None:
             await worker_task
         except asyncio.CancelledError:
             pass
+
+        if river_worker:
+            river_worker.stop()
+            if river_worker_task:
+                river_worker_task.cancel()
+                try:
+                    await river_worker_task
+                except asyncio.CancelledError:
+                    pass
 
         if app.updater.running:
             await app.updater.stop()

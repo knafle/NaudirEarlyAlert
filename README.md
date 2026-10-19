@@ -1,6 +1,6 @@
-# NaudirEarlyAlert 🌩️🤖
+# NaudirEarlyAlert 🌩️🌊🤖
 
-> Daemon autónomo 24/7 y Bot de Telegram para detección temprana y alerta inmediata de tormentas severas y avisos a muy corto plazo (ACP) del Servicio Meteorológico Nacional (SMN) argentino para el **Barrio El Naudir – Aguas Privadas** (Belén de Escobar, Buenos Aires).
+> Daemon autónomo 24/7 y Bot de Telegram para detección temprana y alerta inmediata de **tormentas severas (SMN)** y **crecidas e inundaciones de ríos (Prefectura Naval Argentina)** para el **Barrio El Naudir – Aguas Privadas** (Belén de Escobar, Buenos Aires).
 
 ---
 
@@ -11,42 +11,55 @@
 - **Longitud:** `-58.7391`
 - **Zona Administrativa SAT:** `"Escobar"`
 - **SMN Location ID:** `4816` (Parque El Cazador / Escobar)
+- **Cuenca Hídrica:** Delta del Río Paraná / Río Luján / Canal Villanueva
 
 ---
 
-## ⚙️ Arquitectura del Sistema (2-Tier State Machine)
+## ⚙️ Arquitectura del Sistema
 
-El daemon optimiza el consumo de ancho de banda y cuotas de API mediante un flujo inteligente de dos niveles:
+El daemon ejecuta de forma concurrente dos motores de monitoreo proactivo:
 
 ```mermaid
 graph TD
-    A[Inicio Daemon 24/7] --> B[Nivel 1: Consulta SAT Regional]
-    B -->|ws1.smn.gob.ar con JWT| C{¿Alerta activa en Escobar?}
-    C -->|No / Verde| D[Estado INACTIVO: Radar dormido]
-    D -->|Espera intervalo SAT 30m| B
-    C -->|Sí: Amarillo / Naranja / Rojo| E[Estado ACTIVO: Despierta Nivel 2]
-    E --> F[Nivel 2: Consulta Radar ACP cada 3m]
-    F --> G{¿Polígono cubre El Naudir?}
-    G -->|No: Fuera de cobertura| H[Registra en /descartes con distancia en km]
-    H -->|Espera 3m| F
-    G -->|Sí: Sobre El Naudir| I{¿Ya notificado?}
-    I -->|Sí| J[Ignora duplicado]
-    I -->|No| K[🚨 Difusión Inmediata HTML a Suscriptores]
-    K --> F
+    subgraph "Motor 1: Tormentas Severas SMN (2-Tier)"
+        A[Daemon 24/7] --> B[Nivel 1: Consulta SAT Regional]
+        B -->|Escobar bajo alerta| C[Nivel 2: Radar ACP cada 3m]
+        C -->|Polígono cubre El Naudir| D[🚨 Difusión Alerta Meteorológica]
+    end
+
+    subgraph "Motor 2: Crecidas de Ríos PNA (3 Frentes)"
+        A --> E[RiverAlertWorker cada 45m]
+        E -->|Prefectura Naval Argentina| F{Evaluación de Amenazas}
+        F -->|Zárate / Campana / San Pedro| G[🌊 Alerta Temprana: Crecida Cuenca Arriba]
+        F -->|Tigre / San Fernando / San Isidro| H[💨🌊 Alerta: Sudestada / Represamiento]
+        F -->|Escobar / Dique Luján| I[🚨 Alerta Hídrica Local Inminente]
+    end
 ```
 
-1. **Nivel 1 – Alertas Regionales (SAT):**
-   - Consulta el endpoint oficial de geolocalización `ws1.smn.gob.ar/warning/alert/location/4816` (con fallback a feed abierto).
-   - Analiza si el partido de **Escobar** se encuentra bajo alerta meteorológica (amarillo, naranja o rojo).
-   - Si no hay alertas activas, el monitoreo por radar se mantiene **dormido** para evitar tráfico innecesario.
-   - Si se detecta alerta activa en la zona, el estado pasa a **ACTIVO** y despierta inmediatamente el Nivel 2.
+### 1. Monitoreo Meteorológico SMN (2-Tier State Machine)
+- **Nivel 1 (SAT):** Monitorea alertas del SMN para el partido de Escobar. Si no hay alertas activas, el radar se mantiene dormido.
+- **Nivel 2 (ACP):** Cuando hay alerta activa, consulta avisos a muy corto plazo cada 3 minutos, evalúa geometría espacial con **Shapely** (`Polygon.contains(Point)`) y alerta solo si la celda de tormenta cubre El Naudir.
 
-2. **Nivel 2 – Avisos a Muy Corto Plazo por Radar (ACP):**
-   - Cuando el estado SAT está activo, consulta `ws1.smn.gob.ar/warning/shortterm/` cada **3 a 5 minutos**.
-   - **Geometría Espacial (Shapely):** Parsea el polígono exacto de la celda de tormenta y evalúa si las coordenadas de El Naudir se encuentran **dentro** (`Polygon.contains(Point)`).
-   - **Deduplicación Persistente:** Registra los IDs de celdas ya notificadas en memoria y SQLite para no repetir alertas del mismo evento.
-   - **Difusión Inmediata:** Si una tormenta intersecta El Naudir, emite la alerta con formato HTML a todos los usuarios suscritos vía Telegram.
-   - **Bypass de Cloudflare:** Utiliza renovación automática de Token JWT vía proxy (Scrape.do) cada 1 hora (~720 requests/mes, dentro de la cuota gratuita de 1.000).
+### 2. Monitoreo Hidrométrico PNA (Detección de Fenómenos Extraordinarios)
+El bot opera en **Modo Ultra Silencioso**: no emite alertas por variaciones menores ni niveles de alerta ordinarios (donde solo se tapan muelles o humedales). Está calibrado con las cotas reales y el comportamiento empírico del Barrio El Naudir:
+
+- **Calibración Empírica (Benchmark Histórico Dic 2023):** En el temporal del 18-19 de diciembre de 2023 (la mayor sudestada en 13 años, donde Tigre alcanzó `3.70 m` y Escobar `~3.30 m`), las calles de El Naudir permanecieron secas sin anegamientos. Los umbrales de alerta están calibrados estrictamente por encima de este benchmark para evitar falsas alarmas.
+- **Escalas Oficiales PNA (Sin conversiones ficticias a IGN):** Las alturas se informan exactamente según la escala de cada puerto de Prefectura Naval Argentina (PNA), dado que cada estación cuenta con un cero hidrométrico local propio.
+- **Comunicación 100% Informativa:** Notificaciones objetivas que indican estación, nivel hidrométrico PNA, variación, situación de cuenca, tiempo estimado de viaje (~6 a 12 hs para cuenca alta) y estaciones de referencia en vivo (sin especulaciones ni directivas paternalistas como "cortar luz" o "subir muebles").
+
+#### Niveles y Frentes de Alerta:
+- **Zona Local (Escobar / Dique Luján):**
+  - `ALERTA_LOCAL` (`Escobar >= 3.80 m`, `Dique Luján >= 3.00 m`): Nivel de advertencia local calibrado para El Naudir (supera la marca del temporal de 2023, alerta por saturación de desagües pluviales).
+  - `EMERGENCIA_EXTREMA` (`Escobar >= 4.10 m`, `Dique Luján >= 3.30 m`): Crecida local crítica alcanzando cotas de calzadas bajas y accesos en el barrio.
+- **Cuenca Arriba (Río Paraná - Zárate / Campana / San Pedro) — Modelo Combinado de Confluencia:**
+  - **Filtro Inteligente de Desagüe:** Las crecidas de río arriba (`Zárate >= 2.50 m`) **solo alertan si el río aguas abajo está cargado o no desagota** (`Tigre >= 2.50 m CRECE` o `>= 3.00 m`, o `Escobar >= 2.50 m`). Si el Río de la Plata drena libremente, el sistema permanece en silencio para evitar falsas alarmas.
+  - `AVISO_PREVENTIVO` (`Zárate >= 2.50 m` + Represamiento aguas abajo): Aviso con **6 a 12 horas de anticipación** por confluencia hídrica.
+  - `CRECIDA_MASIVA` (`Zárate >= 3.10 m` + Represamiento aguas abajo): Crecida de gran magnitud en cuenca alta con salida restringida al estuario.
+  - `EMERGENCIA_EXTREMA` (`Zárate >= 3.80 m`): **Trigger de volumen colosal por seguridad** (supera por casi medio metro el récord histórico de 3,32 m). Se dispara de forma unilateral ("no hay delta que aguante"), sin importar el estado del estuario.
+  - `San Pedro / Baradero` (`>= 3.60 m` / `>= 2.80 m`): Seguimiento preventivo con **24 a 48 horas de antelación** si la cuenca inferior está cargada.
+- **Sudestada / Cuenca Abajo (Tigre / San Fernando):**
+  - `ALERTA_LOCAL` (`Tigre >= 3.80 m`): Marea superando el récord de dic-2023 (`3.70 m`) con taponamiento y represamiento directo de desagües.
+  - `EMERGENCIA_EXTREMA` (`Tigre >= 4.05 m`): Sudestada de magnitud histórica excepcional.
 
 ---
 
@@ -54,11 +67,13 @@ graph TD
 
 | Comando | Descripción |
 | :--- | :--- |
-| `/start` | Suscribe al usuario para recibir alertas de tormentas en El Naudir. |
+| `/start` | Suscribe al usuario para recibir alertas de tormentas y crecidas en El Naudir. |
 | `/stop` | Cancela la suscripción y elimina al usuario de la lista de difusión. |
-| `/estado` | Muestra el estado del daemon, alerta SAT actual, modo de radar y suscriptores. |
+| `/estado` | Muestra el estado del daemon, alerta SAT, modo de radar, altura actual de ríos y suscriptores. |
+| `/rio` | Muestra el tablero completo en tiempo real con alturas, tendencias y variaciones de los ríos (Prefectura Naval). |
 | `/descartes` | Lista tormentas vigentes en la región descartadas por estar fuera de cobertura (con distancia en km). |
-| `/prueba` | Envía una alerta de simulación realista **únicamente a tu chat** (no notifica a los demás). |
+| `/prueba` | Envía una alerta de tormenta simulada **únicamente a tu chat**. |
+| `/testrio` | Envía una alerta hídrica simulada a tu chat (`/testrio`, `/testrio cuenca`, `/testrio cuenca masiva`, `/testrio sudestada`). |
 | `/help` | Muestra la ayuda y lista de comandos disponibles. |
 
 ### Formato de Alerta Difundida
