@@ -120,11 +120,11 @@ async def main() -> None:
             location_name=config["location_name"],
         )
         logger.info(
-            "River flood alerts enabled (Escobar: Street=%.2fm, House=%.2fm | Tigre: Street=%.2fm, House=%.2fm)",
-            river_worker.street_cota_escobar,
-            river_worker.house_cota_escobar,
-            river_worker.street_cota_tigre,
-            river_worker.house_cota_tigre,
+            "River flood alerts enabled (Escobar: Alert=%.2fm, Extreme=%.2fm | Tigre: Alert=%.2fm, Extreme=%.2fm)",
+            river_worker.escobar_alert,
+            river_worker.escobar_extreme,
+            river_worker.tigre_alert,
+            river_worker.tigre_extreme,
         )
 
     telegram_bot = TelegramAlertBot(
