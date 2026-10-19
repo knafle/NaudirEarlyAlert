@@ -28,7 +28,7 @@ graph TD
     end
 
     subgraph "Motor 2: Crecidas de Ríos PNA (3 Frentes)"
-        A --> E[RiverAlertWorker cada 45m]
+        A --> E[RiverAlertWorker cada 60m]
         E -->|Prefectura Naval Argentina| F{Evaluación de Amenazas}
         F -->|Zárate / Campana / San Pedro| G[🌊 Alerta Temprana: Crecida Cuenca Arriba]
         F -->|Tigre / San Fernando / San Isidro| H[💨🌊 Alerta: Sudestada / Represamiento]

@@ -309,10 +309,9 @@ class RiverClient:
                 return s
         return None
 
-    async def get_relevant_stations_async(self) -> Dict[str, List[RiverStation]]:
-        """Retrieve stations classified into local, upstream, and downstream groups for El Naudir."""
-        all_stations = await self.get_all_stations_async()
-
+    @staticmethod
+    def filter_relevant_stations(all_stations: Dict[str, RiverStation]) -> Dict[str, List[RiverStation]]:
+        """Filter and classify a dictionary of stations into local, upstream, and downstream groups for El Naudir."""
         def collect(names: List[str]) -> List[RiverStation]:
             items: List[RiverStation] = []
             for n in names:
@@ -327,3 +326,8 @@ class RiverClient:
             "upstream": collect(STATIONS_UPSTREAM),
             "downstream": collect(STATIONS_DOWNSTREAM),
         }
+
+    async def get_relevant_stations_async(self) -> Dict[str, List[RiverStation]]:
+        """Retrieve stations classified into local, upstream, and downstream groups for El Naudir."""
+        all_stations = await self.get_all_stations_async()
+        return self.filter_relevant_stations(all_stations)

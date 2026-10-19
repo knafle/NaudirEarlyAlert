@@ -69,7 +69,7 @@ def load_config() -> dict:
     sat_hours = float(os.getenv("SAT_POLL_INTERVAL_HOURS", "12.0"))
     acp_minutes = float(os.getenv("ACP_POLL_INTERVAL_MINUTES", "3.0"))
     force_acp = os.getenv("FORCE_ACP_POLL", "false").lower() in ("true", "1", "yes")
-    river_minutes = float(os.getenv("RIVER_POLL_INTERVAL_MINUTES", "45.0"))
+    river_minutes = float(os.getenv("RIVER_POLL_INTERVAL_MINUTES", "60.0"))
     enable_river = os.getenv("ENABLE_RIVER_MONITORING", "true").lower() in ("true", "1", "yes")
 
     return {

@@ -73,7 +73,7 @@ class RiverAlertWorker:
     def __init__(
         self,
         river_client: RiverClient,
-        poll_interval_minutes: float = 45.0,
+        poll_interval_minutes: float = 60.0,
         subscribers_db: Optional[SubscribersDB] = None,
         broadcast_callback: Optional[Callable[[RiverAlertEvent], Awaitable[None]]] = None,
         location_name: str = "El Naudir",

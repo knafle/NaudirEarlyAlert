@@ -553,7 +553,26 @@ class TelegramAlertBot:
             return
 
         try:
-            rel = await client.get_relevant_stations_async()
+            # Serve instantly from RAM (0 ms delay, 0 Scrape.do credits spent)
+            rel = None
+            if self.river_worker_ref and getattr(self.river_worker_ref, "current_stations", None):
+                stations = self.river_worker_ref.current_stations
+                if stations:
+                    rel = RiverClient.filter_relevant_stations(stations)
+
+            if not rel:
+                client = self.river_client_ref
+                if not client and self.river_worker_ref and hasattr(self.river_worker_ref, "client"):
+                    client = self.river_worker_ref.client
+
+                if not client:
+                    await update.message.reply_text(
+                        "⚠️ El monitoreo de ríos no está configurado actualmente en el daemon."
+                    )
+                    return
+
+                rel = await client.get_relevant_stations_async()
+
             text = format_river_dashboard(rel, location_name=self.location_name)
             await update.message.reply_text(text, parse_mode=ParseMode.HTML)
         except Exception as err:
