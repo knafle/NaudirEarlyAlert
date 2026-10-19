@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import logging
+import os
 import re
 import time
 from typing import Dict, List, Optional
@@ -140,16 +141,20 @@ class RiverClient:
         timeout: float = 15.0,
         cache_ttl_seconds: float = 180.0,
         verify_ssl: bool = False,
+        scrapedo_key: Optional[str] = None,
+        proxy_url: Optional[str] = None,
     ) -> None:
         self.timeout = timeout
         self.cache_ttl = cache_ttl_seconds
         self.verify_ssl = verify_ssl
+        self.scrapedo_key = scrapedo_key or os.getenv("SCRAPEDO_API_KEY")
+        self.proxy_url = proxy_url or os.getenv("RIVER_PROXY_URL")
 
         self.session = requests.Session()
         self.session.headers.update(DEFAULT_HEADERS)
         retry_strategy = Retry(
-            total=3,
-            backoff_factor=1.0,
+            total=2,
+            backoff_factor=0.5,
             status_forcelist=[429, 500, 502, 503, 504],
             raise_on_status=False,
         )
@@ -163,16 +168,57 @@ class RiverClient:
 
     def fetch_all_stations_sync(self) -> Dict[str, RiverStation]:
         """Fetch and parse all stations from PNA HTML table."""
+        # 1. If Scrape.do key is configured, use it directly (bypasses Google Cloud / AWS IP blocking by PNA)
+        if self.scrapedo_key:
+            try:
+                logger.info("Fetching PNA river data via Scrape.do proxy...")
+                resp = self.session.get(
+                    "https://api.scrape.do",
+                    params={"token": self.scrapedo_key, "url": PNA_ALTURAS_URL},
+                    timeout=self.timeout + 10,
+                )
+                if resp.status_code == 200:
+                    stations = self.parse_pna_html(resp.text)
+                    if stations:
+                        self._cached_data = stations
+                        self._cached_time = time.time()
+                        logger.info("Successfully fetched %d river stations via Scrape.do.", len(stations))
+                        return stations
+                logger.warning("Scrape.do returned HTTP %s for PNA. Falling back to direct fetch...", resp.status_code)
+            except Exception as err:
+                logger.warning("Scrape.do fetch failed: %s. Falling back to direct fetch...", err)
+
+        # 2. If a custom proxy/relay URL is configured (e.g. Cloudflare Worker or reverse proxy)
+        if self.proxy_url:
+            try:
+                logger.info("Fetching PNA river data via proxy URL: %s", self.proxy_url)
+                target = self.proxy_url if "{url}" not in self.proxy_url else self.proxy_url.format(url=PNA_ALTURAS_URL)
+                resp = self.session.get(target, timeout=self.timeout)
+                if resp.status_code == 200:
+                    stations = self.parse_pna_html(resp.text)
+                    if stations:
+                        self._cached_data = stations
+                        self._cached_time = time.time()
+                        return stations
+            except Exception as err:
+                logger.warning("Proxy URL fetch failed: %s", err)
+
+        # 3. Direct fetch
         try:
             resp = self.session.get(
                 PNA_ALTURAS_URL,
-                timeout=self.timeout,
+                timeout=(5.0, self.timeout),
                 verify=self.verify_ssl,
             )
             resp.raise_for_status()
             html_content = resp.text
         except Exception as err:
-            logger.error("Error connecting to PNA heights page: %s", err)
+            logger.error(
+                "Error connecting to PNA heights page: %s. "
+                "(If running on a Cloud VM, Prefectura's firewall blocks foreign datacenter IPs. "
+                "Set SCRAPEDO_API_KEY in .env to route through proxy).",
+                err,
+            )
             # If we have cached data, return it even if expired rather than failing completely
             if self._cached_data:
                 logger.warning("Returning stale cached river data due to fetch error.")
