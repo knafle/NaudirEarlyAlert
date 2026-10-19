@@ -405,20 +405,25 @@ class TelegramAlertBot:
             discarded_line = f"• <b>Avisos ACP fuera del barrio:</b> {discarded_count} descartados (/descartes)\n"
 
         river_line = ""
-        if self.river_worker_ref and hasattr(self.river_worker_ref, "current_stations"):
+        stations = {}
+        if self.river_worker_ref and getattr(self.river_worker_ref, "current_stations", None):
             stations = self.river_worker_ref.current_stations
-            escobar_st = stations.get("ESCOBAR")
-            dique_st = stations.get("DIQUE LUJAN")
+        if not stations and self.river_client_ref and getattr(self.river_client_ref, "_cached_data", None):
+            stations = self.river_client_ref._cached_data
+
+        if stations:
+            escobar_st = stations.get("ESCOBAR") or next((s for k, s in stations.items() if "ESCOBAR" in k), None)
+            dique_st = stations.get("DIQUE LUJAN") or next((s for k, s in stations.items() if "DIQUE" in k and "LUJAN" in k), None)
             e_lvl = f"{escobar_st.level:.2f} m" if escobar_st and escobar_st.level is not None else "N/D"
             d_lvl = f"{dique_st.level:.2f} m" if dique_st and dique_st.level is not None else "N/D"
-            active_river = len(getattr(self.river_worker_ref, "active_alerts", []))
+            active_river = len(getattr(self.river_worker_ref, "active_alerts", [])) if self.river_worker_ref else 0
             river_status_str = f"🚨 {active_river} en alerta" if active_river > 0 else "🟢 Normal"
             river_line = (
                 f"• <b>Monitoreo de Ríos:</b> Activo ({river_status_str})\n"
                 f"  ↳ Escobar: <code>{e_lvl}</code> | Dique Luján: <code>{d_lvl}</code> (/rio)\n"
             )
-        elif self.river_client_ref:
-            river_line = "• <b>Monitoreo de Ríos:</b> Habilitado (/rio)\n"
+        elif self.river_worker_ref or self.river_client_ref:
+            river_line = "• <b>Monitoreo de Ríos:</b> Activo (Cargando primera lectura... /rio)\n"
 
         msg = (
             f"ℹ️ <b>Estado del Sistema - {html.escape(self.location_name)}</b>\n\n"
@@ -572,6 +577,8 @@ class TelegramAlertBot:
                     return
 
                 rel = await client.get_relevant_stations_async()
+                if self.river_worker_ref and client._cached_data and not getattr(self.river_worker_ref, "current_stations", None):
+                    self.river_worker_ref.current_stations = client._cached_data
 
             text = format_river_dashboard(rel, location_name=self.location_name)
             await update.message.reply_text(text, parse_mode=ParseMode.HTML)
